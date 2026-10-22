@@ -77,7 +77,7 @@ export function DataExport() {
   const exportActivities = () =>
     run("activities", async () => {
       const { data, error: e } = await supabase
-        .from("completed_activities").select("*").order("date", { ascending: true });
+        .from("effective_activities").select("*").order("date", { ascending: true });
       if (e) throw e;
       const rows = (data ?? []).map((a) => [
         a.date, a.type, a.name ?? "", a.distance_m ?? "", a.duration_seconds ?? "", a.avg_hr ?? "", a.tss ?? "", a.ctl ?? "", a.atl ?? "",

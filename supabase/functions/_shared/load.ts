@@ -76,7 +76,7 @@ export async function applyFallbackFitness<
   if (!rows.length || rows.some((r) => r.ctl != null)) return rows;
   try {
     const since = iso(new Date(endDate + "T12:00:00Z").getTime() - 90 * DAY);
-    const { data } = await admin.from("completed_activities")
+    const { data } = await admin.from("effective_activities")
       .select("date, tss")
       .eq("user_id", userId).gte("date", since).lte("date", endDate);
     const series = fitnessFromTss(data ?? [], endDate);

@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.workoutmaker.app.data.EnduranceGoals
 import com.workoutmaker.app.data.TrainingProfile
 import com.workoutmaker.app.ui.screens.settings.GOALS_BY_SPORT
+import com.workoutmaker.app.ui.screens.settings.RACE_GOALS
 import com.workoutmaker.app.ui.screens.settings.toggleIn
 import com.workoutmaker.app.ui.components.rememberAnimationsEnabled
 import kotlin.math.abs
@@ -106,11 +107,11 @@ internal fun EnduranceSportQuestions(
     DistanceGoalEditor(sport, profile, seedIfUnset, onUpdate)
 
     // How far and how fast is not the whole question. A cyclist doing 40 km
-    // might be chasing FTP, or racing, or just riding: the distance is the same
-    // and the training is not. Only the chips the picker does not already own
-    // are offered, so nothing here can contradict the flag.
+    // might be chasing FTP or simply riding farther: the distance is the
+    // training target, not a calendar event. Dated events are collected once,
+    // separately, by StepRace after all sport goals are set.
     val intent = remember(sport) {
-        (GOALS_BY_SPORT[sport] ?: emptyList()) - EnduranceGoals.distanceOwnedGoals(sport)
+        ((GOALS_BY_SPORT[sport] ?: emptyList()) - EnduranceGoals.distanceOwnedGoals(sport)) - RACE_GOALS
     }
     if (intent.isNotEmpty()) {
         Text("What are you chasing?", style = MaterialTheme.typography.labelLarge)
@@ -738,4 +739,3 @@ private fun GoalFlag() {
         drawPath(pennant, accent)
     }
 }
-

@@ -158,10 +158,12 @@ fun ActivityDetailScreen(activity: CompletedActivity, planned: PlannedWorkout?, 
                 SectionLabel("On the plan that day", color = mossAccent())
                 Text(p.workout_json.title, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    if (looksLike(p.type, activity.type)) "✓ You did your planned ${p.type}."
-                    else "You had a ${p.type} planned but did this instead.",
+                    if (activity.planned_workout_id == p.id) {
+                        if (activity.link_source == "athlete") "Your assessment: ${activity.session_state.replace('_', ' ')}."
+                        else "Possible match to this plan; completion and dose are not confirmed."
+                    } else "This activity has not been linked to this plan.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (looksLike(p.type, activity.type)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    color = if (activity.planned_workout_id == p.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
                 )
             }
         }

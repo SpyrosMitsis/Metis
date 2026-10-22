@@ -1,3 +1,4 @@
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // schedule-template — expand a saved workout_template into dated
 // planned_workouts rows. Single-workout templates schedule one day; multi-week
 // "plan" templates map week/day onto the calendar from a start date.
@@ -78,6 +79,7 @@ Deno.serve(async (req) => {
       date: it.date,
       type: it.workout.type,
       workout_json: it.workout,
+      sync_requested: push === true,
       llm_provider: "template",
       llm_model: tpl.name,
     }));
@@ -87,35 +89,8 @@ Deno.serve(async (req) => {
       .select("id, date, workout_json");
     if (insErr) return json({ error: `insert failed: ${insErr.message}` }, 500);
 
-    // Optionally push each to Intervals.icu.
-    let pushed = 0;
-    if (push) {
-      const { data: profile } = await admin
-        .from("user_profiles")
-        .select("intervals_athlete_id, intervals_api_key_encrypted")
-        .eq("id", userId).single();
-      if (profile?.intervals_athlete_id && profile?.intervals_api_key_encrypted) {
-        const apiKey = await decryptSecret(admin, profile.intervals_api_key_encrypted);
-        if (apiKey) {
-          for (const row of inserted ?? []) {
-            const w = row.workout_json as Workout;
-            if (w.type === "rest") continue;
-            try {
-              const ev = await createEvent(profile.intervals_athlete_id, apiKey, {
-                date: row.date,
-                name: w.title,
-                description: w.coach_note,
-                type: w.type === "run" ? "Run" : "Workout",
-              });
-              await admin.from("planned_workouts")
-                .update({ intervals_event_id: ev.id, pushed_at: new Date().toISOString() })
-                .eq("id", row.id);
-              pushed++;
-            } catch { /* best effort */ }
-          }
-        }
-      }
-    }
+    const sync = await drainCalendarOutbox(admin,userId);
+    const pushed = Object.keys(sync.events).length;
 
     return json({ scheduled: items.length, pushed, start_date: startStr });
   } catch (e) {

@@ -1,5 +1,7 @@
 package com.workoutmaker.app.strength
 
+import com.workoutmaker.app.util.runCatching
+
 import android.content.Context
 import android.os.Build
 import android.os.VibrationEffect
@@ -148,6 +150,8 @@ class StrengthViewModel @Inject constructor(
     // Restore any in-progress session left behind by a lock/kill — done here,
     // AFTER every property it touches (status, exercises, rest fields…) is
     // initialised, and synchronously so the workout is ready on first frame.
+    private val snapshotFile = SessionSnapshotFile(File(context.filesDir, "active_session.json"))
+
     init { restoreSavedSession() }
 
     // Observe the Calendar → Strength handoffs: opening the tab with a pending
@@ -207,19 +211,9 @@ class StrengthViewModel @Inject constructor(
                 prefs.setCustomsCleanupV1Done()
                 if (tidied > 0) status.value = "Tidied $tidied exercise name(s) to match the catalog"
             }
-            val restored = runCatching { repo.restoreIfEmpty() }.getOrElse {
-                // Only reachable when local history is empty (post-reinstall), so
-                // an empty screen here would silently mask un-restored history.
-                // Log it: a decode failure here (not just a network blip) was
-                // invisible before and looked like a connection problem.
-                Log.w("StrengthVM", "restoreIfEmpty failed", it)
-                status.value = "Couldn't restore your history from the cloud, check your connection and reopen this tab"
-                0
-            }
-            if (restored > 0) status.value = "Restored $restored workouts from the cloud"
-            // Two-way sync: pull in sessions logged elsewhere (e.g. the web app).
-            val merged = repo.mergeFromCloud()
-            if (merged > 0) status.value = "Synced $merged new workout(s) from the cloud"
+            runCatching { repo.mergeFromCloud() }
+                .onSuccess { merged -> if (merged > 0) status.value = "Synced $merged new workout(s) from the cloud" }
+                .onFailure { status.value = "Couldn't refresh cloud history. Showing your saved workouts." }
             history.value = repo.recentWorkouts()
             routines.value = repo.routines()
             loggedExercises.value = repo.loggedExercises()
@@ -562,22 +556,19 @@ class StrengthViewModel @Inject constructor(
 
     private var persistJob: Job? = null
 
-    /** Save the in-progress session to disk. Safe to call on every change (incl.
-     *  each keystroke): writes are debounced and atomic (temp file + rename) so
-     *  rapid calls coalesce and a kill mid-write can never corrupt the file. */
+    /** Coalesce edits; the revision guard also rejects writes already running
+     * when a newer save or discard was requested. */
     fun persistSession() {
-        val snapshot = snapshotSession() // read Compose state on the caller (main) thread
+        val snapshot = snapshotSession()
+        val revision = snapshotFile.nextRevision()
         persistJob?.cancel()
         persistJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(150)
             runCatching {
-                if (snapshot == null) {
-                    sessionFile.delete()
-                } else {
-                    val tmp = File(sessionFile.parentFile, "active_session.tmp")
-                    tmp.writeText(sessionJson.encodeToString(SavedSession.serializer(), snapshot))
-                    tmp.renameTo(sessionFile)
-                }
-            }
+                snapshotFile.write(revision, snapshot?.let {
+                    sessionJson.encodeToString(SavedSession.serializer(), it)
+                })
+            }.onFailure { Log.w("StrengthVM", "Session save failed", it) }
         }
     }
 
@@ -608,20 +599,21 @@ class StrengthViewModel @Inject constructor(
      * killed before its coroutine runs, so on ON_STOP we write on the spot.
      */
     fun persistSessionNow() {
+        persistJob?.cancel()
+        val revision = snapshotFile.nextRevision()
         val snapshot = snapshotSession()
         runCatching {
-            if (snapshot == null) {
-                sessionFile.delete()
-            } else {
-                val tmp = File(sessionFile.parentFile, "active_session.tmp")
-                tmp.writeText(sessionJson.encodeToString(SavedSession.serializer(), snapshot))
-                tmp.renameTo(sessionFile)
-            }
-        }
+            snapshotFile.write(revision, snapshot?.let {
+                sessionJson.encodeToString(SavedSession.serializer(), it)
+            })
+        }.onFailure { Log.w("StrengthVM", "Session save failed", it) }
     }
 
     private fun clearSavedSession() {
-        viewModelScope.launch(Dispatchers.IO) { runCatching { sessionFile.delete() } }
+        persistJob?.cancel()
+        val revision = snapshotFile.nextRevision()
+        runCatching { snapshotFile.write(revision, null) }
+            .onFailure { Log.w("StrengthVM", "Session clear failed", it) }
     }
 
     // Read synchronously in init (the file is tiny) so nav/exercises are set
@@ -838,6 +830,7 @@ class StrengthViewModel @Inject constructor(
                         .atZone(ZoneId.systemDefault()).toLocalDate().toString()
                     FeedbackSyncWorker.request(
                         context, date, rpe, difficulty, p.note.ifBlank { null },
+                        ownerUid = workoutRepo.auth.currentUserOrNull()?.id,
                     )
                 }
                 .onFailure { status.value = "Saved locally; sync failed: ${it.message}" }

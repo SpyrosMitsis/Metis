@@ -13,6 +13,33 @@ data class Exercise(
 
 object ExerciseCatalog {
     val all: List<Exercise> = listOf(
+        // Additional home and gym variations (mirrored on server and Android).
+        Exercise("Incline Push-Up", "Chest", "Bodyweight", compound = true),
+        Exercise("Dumbbell Floor Press", "Chest", "Dumbbell", compound = true),
+        Exercise("Chest-Supported Dumbbell Row", "Back", "Dumbbell", compound = true),
+        Exercise("Assisted Pull-Up", "Back", "Machine", compound = true),
+        Exercise("Inverted Row", "Back", "Bodyweight", compound = true),
+        Exercise("Pike Push-Up", "Shoulders", "Bodyweight", compound = true),
+        Exercise("Dumbbell Shrug", "Shoulders", "Dumbbell"),
+        Exercise("Bodyweight Squat", "Quads", "Bodyweight", compound = true),
+        Exercise("Reverse Lunge (Bodyweight)", "Quads", "Bodyweight", compound = true),
+        Exercise("Split Squat (Bodyweight)", "Quads", "Bodyweight", compound = true),
+        Exercise("Reverse Lunge (Dumbbell)", "Quads", "Dumbbell", compound = true),
+        Exercise("Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", compound = true),
+        Exercise("Single-Leg Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", compound = true),
+        Exercise("Glute Bridge (Bodyweight)", "Glutes", "Bodyweight", compound = true),
+        Exercise("Single-Leg Glute Bridge", "Glutes", "Bodyweight", compound = true),
+        Exercise("Hip Thrust (Dumbbell)", "Glutes", "Dumbbell", compound = true),
+        Exercise("Standing Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+        Exercise("Single-Leg Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+        Exercise("Standing Calf Raise (Dumbbell)", "Calves", "Dumbbell"),
+        Exercise("Side Plank", "Core", "Bodyweight"),
+        Exercise("Dead Bug", "Core", "Bodyweight"),
+        Exercise("Bird Dog", "Core", "Bodyweight"),
+        Exercise("Pallof Press", "Core", "Cable"),
+        Exercise("Reverse Crunch", "Core", "Bodyweight"),
+        Exercise("Kettlebell Goblet Squat", "Quads", "Kettlebell", compound = true),
+        Exercise("Kettlebell Deadlift", "Hamstrings", "Kettlebell", compound = true),
         // ---- Chest ----
         Exercise("Barbell Bench Press", "Chest", "Barbell", compound = true),
         Exercise("Incline Barbell Bench Press", "Chest", "Barbell", compound = true),

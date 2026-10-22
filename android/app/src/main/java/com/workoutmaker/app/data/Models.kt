@@ -70,6 +70,8 @@ data class PlannedWorkout(
     val locked: Boolean = false,
     val skipped: Boolean = false,
     val created_at: String? = null,
+    val reconciliation_status: String = "unknown",
+    val activity_ids: List<String> = emptyList(),
 )
 
 @Serializable

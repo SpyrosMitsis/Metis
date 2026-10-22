@@ -56,26 +56,26 @@ import com.workoutmaker.app.ui.theme.amberAccent
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun FitnessSection(
-    mod: Modifier,
+    modifier: Modifier,
     f: IntervalsStats,
     onOpenActivity: (IntervalsActivity) -> Unit = {},
 ) {
     if (!f.connected) {
-        SectionCard(mod, title = "Fitness (Intervals.icu)") {
+        SectionCard(modifier, title = "Fitness (Intervals.icu)") {
             Text("Connect Intervals.icu in Settings to see your fitness curve, HR zones and recent activities here.",
                 style = MaterialTheme.typography.bodyMedium)
         }
         return
     }
     if (f.error != null) {
-        SectionCard(mod, title = "Fitness (Intervals.icu)") {
+        SectionCard(modifier, title = "Fitness (Intervals.icu)") {
             Text(friendlyError(f.error), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error)
         }
         return
     }
 
-    SectionCard(mod, title = "Fitness" + (f.athlete_name?.let { " · $it" } ?: "")) {
+    SectionCard(modifier, title = "Fitness" + (f.athlete_name?.let { " · $it" } ?: "")) {
         f.summary?.let { s ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -111,7 +111,7 @@ internal fun FitnessSection(
     // not an at-a-glance dashboard signal. (Still available in Intervals.icu.)
 
     if (f.activities.isNotEmpty()) {
-        SectionCard(mod, title = "Recent activities") {
+        SectionCard(modifier, title = "Recent activities") {
             f.activities.take(8).forEach { a ->
                 Row(
                     Modifier.fillMaxWidth().clickable { onOpenActivity(a) }.padding(vertical = 4.dp),

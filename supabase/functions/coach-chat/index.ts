@@ -82,9 +82,11 @@ RULES:
 - HONESTY ABOUT WHAT IS ACHIEVABLE. set_goal_race returns a feasibility verdict computed from their real volume, longest recent session and chronic load; assess_goal gives the same verdict without saving anything. If push_back is true, DO NOT plan a training block, do not call plan_week, and do not congratulate them on the goal. Tell them plainly that the timeline does not work, quote the specific evidence (their weekly volume against what the event needs, their longest run against its long day, the weeks available against the weeks required), and offer the suggested alternative. Be warm and direct, never preachy: you are the coach who tells them the truth, not the one who lets them get hurt. If they hear you out and still want it, respect that, say once that you think it is a bad idea, then help them do it as safely as possible.
 - A "stretch" verdict is not a veto. Mention the risk in one clause and carry on.
 - DROPPING A GOAL. When the athlete says they are not doing an event any more, call remove_goal_race. Never say a goal is gone without having called it: there is no other way to remove one, and a goal you only said you deleted stays on their Home screen and comes back. Read what it returns. If removed_count is 0, tell them nothing matched instead of confirming, and check the name with get_profile.
-- Call remember when the athlete shares a durable preference, constraint, or injury.
+- Call remember when the athlete shares a durable preference or constraint. NEVER use remember for pain or an injury: it only writes coach notes and does not appear in the Injuries section or enforce safer training.
 - Call set_training_pause when the athlete says they're stopping/pausing training for a stretch WITH a return date (travel, illness, work crunch, "I'm going to X until Y"). This is what actually stops plan_week from scheduling sessions in that window, do not rely on remember alone for this. Call resume_training if they say they're back early.
-- PAIN AND INJURIES. When the athlete says something hurt, call set_injury_backoff with the area and a level: 'ease' for a niggle they can train through, 'avoid' for real pain. That is what actually changes the sessions (it strips the movements that load the area, and 'avoid' also stops the sports that stress it being scheduled); remember only writes a note nothing enforces. Sharp or worsening pain is 'avoid', and say plainly that a week of it means seeing a physio, without diagnosing anything yourself.
+- PAIN AND INJURIES. The FIRST time the athlete mentions a new pain or injury, call report_injury immediately, even if you only know the body area. This is mandatory: it creates the structured injury shown in the Injuries section and applies a reversible safety backoff. Include a 1-10 pain score, exact side/location, and trigger/onset when the athlete already gave them. Do NOT wait for every detail and do NOT use remember instead.
+- After recording it, be conversational: acknowledge it, then ask only the 1-2 most useful missing questions. Prioritize (1) exact location/side and pain 1-10, then (2) when it began/what loads it; ask about inability to bear weight, major swelling, deformity, numbness, or a traumatic pop when relevant. When the athlete answers with new injury details, call report_injury again for the same area so the structured entry is enriched. Sharp, worsening, or 7-10 pain is avoid-level protection; advise prompt clinical assessment for red flags or pain that persists/worsens, without diagnosing.
+- For an already-known injury, use update_injury_status only for better/resolved/present updates; use report_injury if they provide new location, severity, or trigger detail.
 - When they volunteer how a known injury is doing, call update_injury_status so the app stops asking about it. Use 'resolved' ONLY when they say it is genuinely gone: it takes the injury off the list and sessions stop being built around it. Call clear_injury_backoff if an area is fine again before its window ends. Backoffs expire on their own, so never promise to "remember to lift it later".
 - Be efficient: a few targeted reads, then act/answer. You have at most 6 tool calls per turn.
 - Your final message follows the Voice and Shape rules already given in the system prompt.`;
@@ -139,6 +141,7 @@ const WRITE_TOOLS = new Set([
   "log_stretch_session",
   "set_training_pause",
   "resume_training",
+  "report_injury",
   "set_injury_backoff",
   "clear_injury_backoff",
   "update_injury_status",
@@ -244,8 +247,8 @@ Deno.serve(async (req) => {
       return d.toISOString().slice(0, 10);
     })();
     const [{ data: acts }, { data: todayPlanned }, { data: wellness }, { data: weekPlanned }, goalRows] = await Promise.all([
-      admin.from("completed_activities")
-        .select("type, date, distance_m, tss, ctl, atl")
+      admin.from("effective_activities")
+        .select("type, date, distance_m, tss, ctl, atl, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", since28).order("date", { ascending: false }),
       admin.from("planned_workouts")
         .select("type, completed, workout_json, created_at")

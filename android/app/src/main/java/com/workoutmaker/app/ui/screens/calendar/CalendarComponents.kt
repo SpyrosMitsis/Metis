@@ -390,23 +390,15 @@ internal fun ActivityCard(act: CompletedActivity, planned: PlannedWorkout?, onCl
         if (meta.isNotEmpty()) ChipRow(meta)
         // Hint when this isn't what was on the plan that day.
         planned?.let { p ->
-            if (p.type != "rest" && !p.completed && !looksLike(p.type, act.type)) {
+            if (p.type != "rest" && !p.completed && act.planned_workout_id != p.id) {
                 Text("Off-plan, ${p.type} was scheduled", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             }
         }
     }
 }
 
-internal fun looksLike(plannedType: String, actualType: String?): Boolean {
-    val a = (actualType ?: "").lowercase()
-    return when (plannedType.lowercase()) {
-        "run" -> a.contains("run") || a.contains("walk")
-        "ride" -> a.contains("ride") || a.contains("bike") || a.contains("cycl")
-        "swim" -> a.contains("swim")
-        "strength" -> a.contains("weight") || a.contains("strength") || a.contains("workout") || a.contains("gym")
-        else -> false
-    }
-}
+internal fun looksLike(plannedType: String, actualType: String?): Boolean =
+        com.workoutmaker.app.data.activityMatchesPlan(plannedType, actualType)
 
 /**
  * Long-press peek: what is on a day, without leaving the month.

@@ -106,10 +106,10 @@ export const api = {
       estimated_cost_usd: number;
       intervals_event_id: string | null;
       push_error: string | null;
-    }>("generate-workout", args),
+    }>("generate-workout", { ...args, date: args.date ?? localDate(), request_id: crypto.randomUUID() }),
 
   planWeek: (startDate?: string) =>
-    invoke<{ planned?: number; week?: unknown; error?: string }>("plan-week", { start_date: startDate }),
+    invoke<{ planned?: number; week?: unknown; error?: string }>("plan-week", { start_date: startDate ?? localDate(), today: localDate(), request_id: crypto.randomUUID() }),
 
   pushWorkout: (workout_id: string) =>
     invoke<{ ok: boolean; intervals_event_id: string }>("push-workout", { workout_id }),
@@ -224,3 +224,5 @@ export async function coachChatStream(
   }
   return out;
 }
+
+function localDate() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }

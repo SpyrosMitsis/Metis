@@ -938,7 +938,7 @@ function profileStub(row: Record<string, unknown>) {
 }
 
 Deno.test("injury tools are registered and advertised to the model", () => {
-  const names = ["set_injury_backoff", "clear_injury_backoff", "update_injury_status"];
+  const names = ["report_injury", "set_injury_backoff", "clear_injury_backoff", "update_injury_status"];
   for (const n of names) {
     const t = TOOL_CATALOG.find((x) => x.name === n);
     assert(t, `${n} missing from the catalog`);
@@ -946,6 +946,41 @@ Deno.test("injury tools are registered and advertised to the model", () => {
     assert(nativeToolDefs().some((d) => d.name === n), `${n} not advertised natively`);
     assert(toolCatalogPrompt().includes(n), `${n} not in the protocol prompt`);
   }
+});
+
+Deno.test("report_injury: atomically creates a structured injury and initial protection", async () => {
+  const { admin, updates } = profileStub({ onboarding: { goal: "10K" }, injury_backoff: [] });
+  const out = JSON.parse(await executeTool(admin, "u1", "auth", "report_injury", {
+    area: " left knee ", pain: 6, detail: "Hurts when I squat",
+  }, "2026-07-26"));
+  assertEquals(out.ok, true);
+  assertEquals(out.created, true);
+  assertEquals(out.injury.area, "left knee");
+  assertEquals(out.injury.severity, "moderate");
+  const onboarding = updates[0].onboarding as Record<string, unknown>;
+  const injuries = onboarding.injuries as Record<string, unknown>[];
+  assertEquals(injuries.length, 1);
+  assertEquals(injuries[0].area, "left knee");
+  assertEquals(injuries[0].severity, "moderate");
+  assertEquals(injuries[0].note, "Hurts when I squat");
+  assertEquals(injuries[0].raised_at, "2026-07-26");
+  assertEquals((updates[0].injury_backoff as Record<string, unknown>[])[0].level, "ease");
+});
+
+Deno.test("report_injury: enriches an existing injury and escalates severe pain", async () => {
+  const { admin, updates } = profileStub({
+    onboarding: { injuries: [{ area: "Left knee", severity: "", raised_at: "2026-07-20" }] },
+    injury_backoff: [{ area: "Left knee", level: "ease", until: "2026-08-01" }],
+  });
+  const out = JSON.parse(await executeTool(admin, "u1", "auth", "report_injury", {
+    area: "left knee", pain: 8, detail: "Sharp pain on stairs",
+  }, "2026-07-26"));
+  assertEquals(out.created, false);
+  const injuries = (updates[0].onboarding as Record<string, unknown>).injuries as Record<string, unknown>[];
+  assertEquals(injuries.length, 1);
+  assertEquals(injuries[0].area, "Left knee", "keeps the existing canonical label");
+  assertEquals(injuries[0].severity, "serious");
+  assertEquals((updates[0].injury_backoff as Record<string, unknown>[])[0].level, "avoid");
 });
 
 Deno.test("set_injury_backoff: writes a dated, structured backoff", () => {

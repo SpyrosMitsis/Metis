@@ -22,6 +22,7 @@ data class LlmKeyRow(
 
 @Serializable
 data class WorkoutFeedback(
+    val id: String = java.util.UUID.randomUUID().toString(),
     val planned_workout_id: String? = null,
     val date: String,
     val completed: Boolean = true,

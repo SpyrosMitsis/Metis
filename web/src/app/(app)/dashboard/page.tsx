@@ -54,7 +54,7 @@ export default function DashboardPage() {
     queryFn: async () => {
       const since = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
       const { data } = await supabase
-        .from("completed_activities").select("*")
+        .from("effective_activities").select("*")
         .gte("date", since).order("date", { ascending: false }).limit(8);
       return (data ?? []) as CompletedActivity[];
     },

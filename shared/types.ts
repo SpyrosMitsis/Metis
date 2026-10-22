@@ -164,6 +164,10 @@ export interface ThresholdTest {
 // A past activity pulled from Intervals.icu (or logged manually) into
 // completed_activities. data_json holds the full Intervals object.
 export interface CompletedActivity {
+  planned_workout_id?: string | null;
+  link_source?: string | null;
+  session_state?: string;
+  content_revision?: number;
   id: string;
   intervals_id: string;
   type: string | null;
@@ -187,6 +191,8 @@ export interface WellnessCheckin {
 }
 
 export interface PlannedWorkout {
+  reconciliation_status?: string;
+  activity_ids?: string[];
   id: string;
   date: string;
   type: "run" | "ride" | "swim" | "strength" | "rest";

@@ -1,3 +1,4 @@
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // push-workout — push an already-planned workout to the Intervals.icu calendar.
 //
 // POST { workout_id }
@@ -28,32 +29,12 @@ Deno.serve(async (req) => {
       .single();
     if (!planned) return json({ error: "workout not found" }, 404);
 
-    const { data: profile } = await admin
-      .from("user_profiles")
-      .select("intervals_athlete_id, intervals_api_key_encrypted")
-      .eq("id", userId)
-      .single();
-    if (!profile?.intervals_athlete_id || !profile?.intervals_api_key_encrypted) {
-      return json({ error: "no Intervals.icu credentials" }, 400);
-    }
-
-    const apiKey = await decryptSecret(admin, profile.intervals_api_key_encrypted);
-    if (!apiKey) return json({ error: "failed to decrypt key" }, 500);
-
-    const w = planned.workout_json as Workout;
-    const ev = await createEvent(profile.intervals_athlete_id, apiKey, {
-      date: planned.date,
-      name: w.title,
-      description: renderIntervalsWorkout(w),
-      type: w.type === "run" ? "Run" : "Workout",
-    });
-
-    await admin
-      .from("planned_workouts")
-      .update({ intervals_event_id: ev.id, pushed_at: new Date().toISOString() })
-      .eq("id", workout_id);
-
-    return json({ ok: true, intervals_event_id: ev.id });
+    const { error } = await admin.from("planned_workouts").update({ sync_requested: true })
+      .eq("id", workout_id).eq("user_id", userId);
+    if (error) throw new Error(error.message);
+    const sync = await drainCalendarOutbox(admin, userId);
+    return json({ ok: !sync.error, intervals_event_id: sync.events[workout_id] ?? planned.intervals_event_id,
+      sync_pending: !!sync.error, error: sync.error });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }

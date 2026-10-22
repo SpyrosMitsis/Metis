@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
     const onboarding = (profile?.onboarding ?? {}) as Record<string, unknown>;
 
     const [{ data: activities }, { data: planned }, goalRows] = await Promise.all([
-      admin.from("completed_activities").select("date, type, tss")
+      admin.from("effective_activities").select("date, type, tss, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", prevStart).lte("date", weekEnd).order("date", { ascending: true }),
       admin.from("planned_workouts").select("date, type, completed")
         .eq("user_id", userId).gte("date", weekStart).lte("date", weekEnd).neq("type", "rest"),

@@ -300,11 +300,11 @@ internal fun StepRace(profile: TrainingProfile, vm: OnboardingViewModel) {
     StepColumn {
         val goalDate = profile.goal_date?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
         if (goalDate != null) {
-            // The race as a real card: date, phase countdown, target pace, and
+            // The target event as a real card: date, phase countdown, target pace, and
             // clear Change/Remove actions instead of one ambiguous button.
             val phase = Periodization.phaseFor(goalDate, LocalDate.now())
             SectionCard {
-                SectionLabel("YOUR GOAL RACE")
+                SectionLabel("YOUR PRIMARY EVENT")
                 Text(
                     goalDate.format(DateTimeFormatter.ofPattern("EEE d MMM yyyy")),
                     style = MaterialTheme.typography.titleMedium,
@@ -324,15 +324,20 @@ internal fun StepRace(profile: TrainingProfile, vm: OnboardingViewModel) {
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.weight(1f)) { Text("Change") }
+                    OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.weight(1f)) { Text("Change event") }
                     TextButton(onClick = { vm.update { it.copy(goal_date = null, target_pace = null) } }) {
                         Text("Remove")
                     }
                 }
             }
         } else {
+            Text(
+                "This is separate from what you are training toward. Add a dated event only if you want the plan to peak for it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             OutlinedButton(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("Add goal race")
+                Text("Add target event")
             }
         }
     }

@@ -109,7 +109,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.navigation:navigation-compose:2.8.1")
+    implementation("androidx.navigation:navigation-compose:2.8.9")
 
     // Play Billing — play flavor only, so foss builds stay Google-free.
     "playImplementation"("com.android.billingclient:billing-ktx:7.1.1")

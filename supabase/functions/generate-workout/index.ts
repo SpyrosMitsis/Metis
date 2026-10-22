@@ -1,3 +1,5 @@
+import { assertPublishable, isoDate, planRevision, replacePlan, requestId, reviewGeneratedWorkout } from "../_shared/plan_store.ts";
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // generate-workout — the full AI generation flow.
 //
 // POST { date?: "YYYY-MM-DD", type?: "run"|"strength"|"auto", duration?: number, push?: boolean }
@@ -49,11 +51,9 @@ import { memoryDocsBlock, memoryFromProfile } from "../_shared/agent_memory.ts";
 import { computeRecovery } from "../_shared/recovery.ts";
 import { llmAccess } from "../_shared/llm_keys.ts";
 import {
-  canonicalizeStrengthExercises,
   compoundForName,
   customExercises,
   exerciseCatalogBlock,
-  registerUnknownExercises,
 } from "../_shared/exercise_catalog.ts";
 import { type MainLift, reviewWorkout } from "../_shared/workout_review.ts";
 import { activeBackoffs, backoffBlock, sportsToAvoid, substituteSport } from "../_shared/injury.ts";
@@ -78,7 +78,9 @@ Deno.serve(async (req) => {
 
     const admin = adminClient();
     const body = await req.json().catch(() => ({}));
-    const date: string = body.date ?? new Date().toISOString().slice(0, 10);
+    const date = isoDate(body.date);
+    const generationId = requestId(body.request_id);
+    const revision = await planRevision(admin, userId);
     const requestedType: string = body.type ?? "auto";
     const shouldPush: boolean = body.push ?? true;
     log.info("request", { date, requestedType, push: shouldPush, hasRequest: !!body.request });
@@ -113,8 +115,8 @@ Deno.serve(async (req) => {
     const since28 = new Date(Date.now() - 28 * DAY).toISOString().slice(0, 10);
     const since14 = new Date(Date.now() - 14 * DAY).toISOString().slice(0, 10);
     const { data: activities } = await admin
-      .from("completed_activities")
-      .select("type, date, distance_m, tss, ctl, atl")
+      .from("effective_activities")
+      .select("type, date, distance_m, tss, ctl, atl, planned_workout_id, link_source")
       .eq("user_id", userId)
       .gte("date", since28)
       .order("date", { ascending: false });
@@ -403,7 +405,7 @@ Deno.serve(async (req) => {
         body: bodyComposition(onboarding),
         bodyTrend: bodyTrendLine,
       });
-      // Pin exercise names to the loggable catalog (+ the athlete's customs).
+      // Pin exercise names to the loggable bundled catalog.
       userPrompt += await exerciseCatalogBlock(admin, userId);
     } else if (type === "rest") {
       userPrompt = `Generate a REST day. Goal: ${goal}. Recent 3-day wellness energy ${wellness3d.energy.toFixed(1)}/5, soreness ${wellness3d.soreness.toFixed(1)}/5. Return JSON only.`;
@@ -627,18 +629,13 @@ Return the revised workout as JSON only, same schema.`;
       return json({ error: "could not parse workout", detail: parseError, raw: outcome.text }, 422);
     }
 
-    // 8c. snap reworded strength names onto the loggable catalog (e.g. "Machine
-    // Lat Pulldown" → "Lat Pulldown") BEFORE saving, so the client gets catalog-
-    // exact names and only truly-new exercises become customs.
-    const customs = validated.type === "strength" ? await customExercises(admin, userId) : [];
-    if (validated.type === "strength") canonicalizeStrengthExercises(validated, customs);
-
     // 8d. CONTENT review — enforce the prescription (progressive-overload floor,
     // load safety ceiling, weekly volume landmark, 48h recovery, endurance
     // readiness) and recompute an independent TSS so a bad self-report can't
     // poison next-day ACWR. Auto-fixable issues are corrected in place; any
     // remaining judgement-call violations trigger ONE targeted repair pass.
     const reviewCtx = {
+      catalogOnly: true,
       mainLifts,
       weeklySetsByMuscle,
       muscleGroupsLast48h,
@@ -657,7 +654,7 @@ Return the revised workout as JSON only, same schema.`;
       readinessBasis: recovery.basis,
       equipment: onboarding.equipment as string | undefined,
     };
-    let review = reviewWorkout(validated, reviewCtx);
+    let review = reviewGeneratedWorkout(validated, reviewCtx);
     validated = review.corrected;
     if (review.violations.length) {
       try {
@@ -681,8 +678,7 @@ Return the revised workout as JSON only, same schema.`;
         const v2 = validateWorkout(extractJson(retry.text));
         if (v2.ok && v2.workout) {
           const w2 = v2.workout;
-          if (w2.type === "strength") canonicalizeStrengthExercises(w2, customs);
-          const r2 = reviewWorkout(w2, reviewCtx);
+          const r2 = reviewGeneratedWorkout(w2, reviewCtx);
           // Keep the repair only if it genuinely reduced the violation count.
           if (r2.violations.length < review.violations.length) {
             validated = r2.corrected;
@@ -695,66 +691,15 @@ Return the revised workout as JSON only, same schema.`;
       }
     }
 
-    // 8e. SAFETY NET — never serve an unsafe or hollowed-out session. If the
-    // contraindication strip (or corrections) left a non-rest workout with no
-    // real content, fall back to a recovery/mobility day rather than risk it.
-    if (validated.type !== "rest" && validated.sections.every((s) => s.exercises.length === 0)) {
-      validated = {
-        type: "rest",
-        title: "Recovery / mobility",
-        duration_minutes: 30,
-        tss_estimate: 10,
-        rpe_target: 2,
-        sections: [],
-        coach_note:
-          "Held back today: the generated session conflicted with an injury/constraint on file. " +
-          "Do easy mobility and recovery instead, and re-generate once it's cleared.",
-      } as typeof validated;
-      review.violations.push("fell back to a safe recovery day (unsafe/empty after review)");
-    }
+    assertPublishable(validated, reviewCtx);
 
     // Recompute cost in case the repair pass replaced `outcome`.
     const finalCost = estimateCostUsd(outcome.provider, outcome.promptTokens, outcome.completionTokens, customPriceFromProfile(outcome.provider, profile), outcome.model);
 
-    // 9. persist planned workout + log -------------------------------------
-    // Idempotent: replace any incomplete plan already on this date so repeated
-    // generations don't pile up duplicates (and clean up their watch events).
-    const { data: stale } = await admin
-      .from("planned_workouts")
-      .select("id, intervals_event_id")
-      .eq("user_id", userId).eq("date", date).eq("completed", false);
-    if (stale?.length) {
-      const key = intervalsApiKey ??
-        (profile.intervals_api_key_encrypted ? await decryptSecret(admin, profile.intervals_api_key_encrypted) : null);
-      if (key && profile.intervals_athlete_id) {
-        for (const r of stale) {
-          if (r.intervals_event_id) {
-            try { await deleteEvent(profile.intervals_athlete_id, key, r.intervals_event_id); } catch (_e) { /* ignore */ }
-          }
-        }
-      }
-      await admin.from("planned_workouts").delete().eq("user_id", userId).eq("date", date).eq("completed", false);
-    }
-
-    const { data: planned, error: insErr } = await admin
-      .from("planned_workouts")
-      .insert({
-        user_id: userId,
-        date,
-        type: validated.type,
-        workout_json: validated,
-        llm_provider: outcome.provider,
-        llm_model: outcome.model,
-        // Lock athlete-requested fixed sessions so the weekly re-planner leaves them be.
-        locked: body.lock === true,
-      })
-      .select()
-      .single();
-    if (insErr) return json({ error: `save failed: ${insErr.message}` }, 500);
-
-    // Any exercise the model introduced outside the catalog becomes a custom
-    // entry (with the AI's metadata) so the loggers recognise it by name.
-    await registerUnknownExercises(admin, userId, validated);
+    const [planned] = await replacePlan(admin, userId, generationId, body, revision, date, date, [{
+      date, type: validated.type, workout_json: validated, llm_provider: outcome.provider,
+      llm_model: outcome.model, locked: body.lock === true, sync_requested: shouldPush,
+    }]);
 
     // Same inputs as finalCost above, so the logged cost matches what we return.
     await logLlmResult(admin, userId, "workout", hosted, outcome, profile, {
@@ -766,31 +711,9 @@ Return the revised workout as JSON only, same schema.`;
       workoutId: planned.id,
     });
 
-    // 10. push to Intervals.icu calendar -----------------------------------
-    let intervalsEventId: string | null = null;
-    let pushError: string | null = null;
-    if (shouldPush && validated.type !== "rest" &&
-        profile.intervals_athlete_id && profile.intervals_api_key_encrypted) {
-      try {
-        const apiKey = intervalsApiKey ?? await decryptSecret(admin, profile.intervals_api_key_encrypted);
-        if (apiKey) {
-          const description = renderIntervalsWorkout(validated);
-          const ev = await createEvent(profile.intervals_athlete_id, apiKey, {
-            date,
-            name: validated.title,
-            description,
-            type: validated.type === "run" ? "Run" : validated.type === "ride" ? "Ride" : validated.type === "swim" ? "Swim" : "Workout",
-          });
-          intervalsEventId = ev.id;
-          await admin
-            .from("planned_workouts")
-            .update({ intervals_event_id: ev.id, pushed_at: new Date().toISOString() })
-            .eq("id", planned.id);
-        }
-      } catch (e) {
-        pushError = e instanceof Error ? e.message : String(e);
-      }
-    }
+    const sync = await drainCalendarOutbox(admin, userId);
+    const intervalsEventId = sync.events[planned.id] ?? null;
+    const pushError = sync.error;
 
     log.info("done", {
       ms: Date.now() - startedAt,

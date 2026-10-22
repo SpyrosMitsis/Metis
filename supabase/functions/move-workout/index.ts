@@ -1,3 +1,5 @@
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
+import { isoDate } from "../_shared/plan_store.ts";
 // move-workout — reschedule a planned workout to another date AND move its
 // Intervals.icu calendar event (so the watch schedule follows the app).
 //
@@ -24,6 +26,7 @@ Deno.serve(async (req) => {
       return json({ error: "new_date must be YYYY-MM-DD" }, 400);
     }
 
+    isoDate(new_date);
     const admin = adminClient();
     const { data: planned } = await admin
       .from("planned_workouts")
@@ -40,31 +43,8 @@ Deno.serve(async (req) => {
       .eq("user_id", userId);
     if (error) return json({ error: error.message }, 500);
 
-    // Best-effort: move the watch/calendar event with it.
-    let eventMoved = false;
-    let eventError: string | null = null;
-    if (planned.intervals_event_id) {
-      const { data: profile } = await admin
-        .from("user_profiles")
-        .select("intervals_athlete_id, intervals_api_key_encrypted")
-        .eq("id", userId)
-        .single();
-      if (profile?.intervals_athlete_id && profile?.intervals_api_key_encrypted) {
-        const apiKey = await decryptSecret(admin, profile.intervals_api_key_encrypted);
-        if (apiKey) {
-          try {
-            await updateEvent(profile.intervals_athlete_id, apiKey, planned.intervals_event_id, {
-              start_date_local: `${new_date}T00:00:00`,
-            });
-            eventMoved = true;
-          } catch (e) {
-            eventError = e instanceof Error ? e.message : String(e);
-          }
-        }
-      }
-    }
-
-    return json({ ok: true, old_date: planned.date, new_date, event_moved: eventMoved, event_error: eventError });
+    const sync = await drainCalendarOutbox(admin, userId);
+    return json({ ok: true, old_date: planned.date, new_date, event_moved: !!sync.events[workout_id], event_error: sync.error });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }

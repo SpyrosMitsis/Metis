@@ -33,7 +33,7 @@ export function ActivityDetailCard({
   const cal = calories(activity); if (cal) stats.push(["Calories", `${cal} kcal`]);
   if (activity.tss && activity.tss > 0) stats.push(["Training load (TSS)", `${Math.round(activity.tss)}`]);
 
-  const matched = planned ? looksLike(planned.type, activity.type) : false;
+  const matched = planned ? activity.planned_workout_id === planned.id : false;
 
   return (
     <Card>
@@ -68,7 +68,7 @@ export function ActivityDetailCard({
           <Section title="On the plan that day" tint="moss">
             <p className="text-sm font-medium">{planned.workout_json.title}</p>
             <p className="text-sm" style={{ color: matched ? "hsl(var(--primary))" : "hsl(var(--sand))" }}>
-              {matched ? `✓ You did your planned ${planned.type}.` : `You had a ${planned.type} planned but did this instead.`}
+              {matched ? `✓ Possible match to your planned ${planned.type}.` : `You had a ${planned.type} planned but did this instead.`}
             </p>
           </Section>
         )}

@@ -250,6 +250,13 @@ interface StrengthDao {
     @Query("SELECT * FROM strength_workout WHERE synced = 0 ORDER BY startedAt")
     suspend fun unsyncedWorkouts(): List<WorkoutEntity>
 
+    @Transaction
+    suspend fun acknowledgeWorkout(snapshot: WorkoutEntity, sets: List<SetEntity>) {
+        if (workout(snapshot.id) == snapshot && setsForWorkout(snapshot.id) == sets) {
+            markWorkoutSynced(snapshot.id)
+        }
+    }
+
     @Query("UPDATE strength_workout SET synced = 1 WHERE id = :id")
     suspend fun markWorkoutSynced(id: String)
 

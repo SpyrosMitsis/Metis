@@ -55,7 +55,7 @@ import com.workoutmaker.app.ui.components.BreathingBackdrop
 import com.workoutmaker.app.ui.components.Confetti
 import com.workoutmaker.app.ui.components.rememberAnimationsEnabled
 import com.workoutmaker.app.ui.screens.settings.SPORTS
-import com.workoutmaker.app.ui.screens.settings.shouldAskGoalRace
+import com.workoutmaker.app.ui.screens.settings.shouldOfferTargetEvent
 import com.workoutmaker.app.ui.screens.settings.sportLabel
 
 // The onboarding steps, in order. RACE and the gym block are conditional; the
@@ -94,7 +94,10 @@ internal fun visibleSteps(p: TrainingProfile): List<StepSpec> = buildList {
     }
     // "Your numbers": optional performance anchors, one section per sport.
     if (p.sports.isNotEmpty()) add(StepSpec(ObStep.PERFORMANCE))
-    if (shouldAskGoalRace(p)) add(StepSpec(ObStep.RACE))
+    // A target event is optional and separate from the training goal above.
+    // Every endurance athlete may have one; it must not be gated behind
+    // choosing a race-shaped goal label first.
+    if (shouldOfferTargetEvent(p)) add(StepSpec(ObStep.RACE))
     add(StepSpec(ObStep.AVAILABILITY))
     // Effort + progression get their own page: they price themselves from the
     // week just chosen, and burying them under the day picker hid the choice.
@@ -141,8 +144,8 @@ internal fun stepHeadline(spec: StepSpec): Pair<String, String?>? = when (spec.k
         "Leave it to me unless you already train a particular way."
     ObStep.PERFORMANCE -> "Your numbers" to
         "Optional anchors. Every one you fill makes the prescribed paces and weights sharper."
-    ObStep.RACE -> "Anything on the calendar?" to
-        "A dated goal is what turns a pile of weeks into base, build, peak and taper."
+    ObStep.RACE -> "Do you have a target event?" to
+        "Optional. Your training goal still guides the plan; an event date adds base, build, peak and taper."
     ObStep.AVAILABILITY -> "Which days are yours?" to
         "Answer the three questions and the chart shows the week you just described."
     ObStep.EFFORT -> "How hard should your weeks be?" to null
@@ -184,9 +187,9 @@ fun OnboardingScreen(vm: OnboardingViewModel = hiltViewModel()) {
 
     val celebrating by vm.celebrating.collectAsStateSafe()
 
-    // Keyed on everything that can add or drop a step: the sports themselves, the
-    // named goals, and the distance targets (either kind of goal opens the race step).
-    val steps = remember(profile.sports, profile.goals_by_sport, profile.distance_goal_km) { visibleSteps(profile) }
+    // Target-event eligibility depends only on the selected sports. The event
+    // itself is optional, not a second consequence of selecting a goal/distance.
+    val steps = remember(profile.sports) { visibleSteps(profile) }
     val idx = stepIndex.coerceIn(0, steps.lastIndex)
     val current = steps[idx]
     val animationsOn = rememberAnimationsEnabled()

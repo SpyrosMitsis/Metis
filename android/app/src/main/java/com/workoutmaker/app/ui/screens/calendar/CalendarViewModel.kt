@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.calendar
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue

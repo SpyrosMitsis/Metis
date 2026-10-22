@@ -14,7 +14,7 @@
 // ============================================================================
 
 import type { InjuryBackoff, InjuryEntry, Workout, WorkoutExercise } from "./types.ts";
-import { allowedCategories, categoryOfExercise, EXERCISE_CATALOG } from "./exercise_catalog.ts";
+import { allowedCategories, categoryOfExercise, enforceStrengthCatalog, EXERCISE_CATALOG } from "./exercise_catalog.ts";
 import { exerciseLoadsArea, sportsForArea } from "./injury.ts";
 import type { NextTarget } from "./progression.ts";
 
@@ -31,6 +31,8 @@ export interface MainLift {
 }
 
 export interface ReviewContext {
+  /** Required for newly generated plans; historical reviews may include custom lifts. */
+  catalogOnly?: boolean;
   mainLifts: MainLift[];
   weeklySetsByMuscle: Record<string, number>;
   muscleGroupsLast48h: string[];
@@ -59,7 +61,11 @@ export interface ReviewContext {
   equipment?: string;
 }
 
+export type ViolationCode = "CATALOG_ENTRY" | "INJURY_CONTRAINDICATION" | "AVOID_SPORT" | "AVOID_MOVEMENT" | "EASE_INTENSITY" | "EASE_MOVEMENT" | "EQUIPMENT" | "PROGRESSION_TARGET" | "LOAD_FLOOR" | "LOAD_CEILING" | "ABSOLUTE_LOAD" | "MUSCLE_RECOVERY" | "WEEKLY_VOLUME" | "QUALITY_DURATION" | "MIXED_QUALITY" | "FATIGUE" | "HARD_SPACING" | "READINESS_CAP";
+export interface ReviewIssue { code: ViolationCode; message: string }
+
 export interface ReviewResult {
+  issues: ReviewIssue[];
   violations: string[];
   corrected: Workout;
   // Populated when the independent recompute overrode the model's tss_estimate.
@@ -254,12 +260,20 @@ export function computeTss(w: Workout): number {
 
 export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
   const violations: string[] = [];
+  const issues: ReviewIssue[] = [];
+  const issue = (code: ViolationCode, message: string) => { issues.push({code,message}); violations.push(message); };
   const unsafe: string[] = [];
   // Deep-ish clone so corrections don't mutate the caller's object.
   const corrected: Workout = {
     ...w,
     sections: w.sections.map((s) => ({ ...s, exercises: s.exercises.map((e) => ({ ...e })) })),
   };
+
+  if (ctx.catalogOnly) {
+    for (const name of enforceStrengthCatalog(corrected)) {
+      issue("CATALOG_ENTRY", `${name}: not in the bundled exercise library, removed; choose a library exercise`);
+    }
+  }
 
   // SAFETY FIRST — strip any contraindicated movement, whatever the type. The
   // engine must never serve a movement that loads an active injury. Severity
@@ -273,7 +287,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         const hit = rules.find((r) => r.forbid.test(ex.name));
         if (!hit) return true;
         const msg = `${ex.name}: contraindicated, ${hit.reason} (injury on file)`;
-        violations.push(msg);
+        issue("INJURY_CONTRAINDICATION", msg);
         if (hit.severity === "mild") return true; // caution only, keep it
         unsafe.push(msg);
         return false; // remove it
@@ -304,13 +318,13 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     for (const b of avoid) {
       if (isEndurance(corrected.type) && sportsForArea(b.area).includes(corrected.type)) {
         const msg = `${corrected.type} loads the ${b.area}, which is on an avoid backoff until ${b.until}`;
-        violations.push(msg);
+        issue("AVOID_SPORT", msg);
         unsafe.push(msg);
       }
       for (const sec of corrected.sections) {
         sec.exercises = sec.exercises.filter((ex) => {
           if (!exerciseLoadsArea(b.area, ex.name, muscleOf(ex))) return true;
-          violations.push(
+          issue("AVOID_MOVEMENT", 
             `${ex.name}: loads the ${b.area}, on an avoid backoff until ${b.until}, removed`,
           );
           return false;
@@ -334,7 +348,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
           }
         }
         if (corrected.rpe_target > EASE_RPE_CAP) corrected.rpe_target = EASE_RPE_CAP;
-        violations.push(
+        issue("EASE_INTENSITY", 
           `${b.area} is on an ease backoff until ${b.until}, ${corrected.type} capped to easy aerobic (Z2, RPE <=${EASE_RPE_CAP})`,
         );
       }
@@ -343,7 +357,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         .filter((ex) => exerciseLoadsArea(b.area, ex.name, muscleOf(ex)))
         .map((ex) => ex.name);
       if (loaded.length) {
-        violations.push(
+        issue("EASE_MOVEMENT", 
           `${b.area} is on an ease backoff until ${b.until}: keep ${loaded.join(", ")} light, ` +
             `well short of failure, and drop the load rather than the reps`,
         );
@@ -361,7 +375,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
       sec.exercises = sec.exercises.filter((ex) => {
         const cat = categoryOfExercise(ex.name);
         if (cat && !allowed.has(cat)) {
-          violations.push(`${ex.name}: needs ${cat}, not in the athlete's equipment (${ctx.equipment}), removed`);
+          issue("EQUIPMENT", `${ex.name}: needs ${cat}, not in the athlete's equipment (${ctx.equipment}), removed`);
           return false;
         }
         return true;
@@ -388,7 +402,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
           const t = lift.target;
           const repsNum = Number((ex.reps ?? "").match(/\d+/)?.[0] ?? NaN);
           if (Math.abs(ex.weight_kg - t.weightKg) > 1e-6 || repsNum !== t.reps) {
-            violations.push(
+            issue("PROGRESSION_TARGET", 
               `${ex.name}: prescribed ${ex.weight_kg}kg×${ex.reps} ≠ progression target ${t.weightKg}kg×${t.reps}, snapped to the engine target`,
             );
             ex.weight_kg = t.weightKg;
@@ -401,7 +415,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         if (lift && typeof ex.weight_kg === "number" && lift.lastWeight > 0 &&
             ex.weight_kg < lift.lastWeight - 1e-6 &&
             !ctx.muscleGroupsLast48h.includes(muscleOf(ex))) {
-          violations.push(
+          issue("LOAD_FLOOR", 
             `${ex.name}: prescribed ${ex.weight_kg}kg is below last top set ${lift.lastWeight}kg, raised to ${lift.lastWeight}kg`,
           );
           ex.weight_kg = lift.lastWeight;
@@ -411,10 +425,10 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         if (typeof ex.weight_kg === "number") {
           if (lift && lift.estimated1rm > 0 && ex.weight_kg > lift.estimated1rm * 1.5) {
             const cap = Math.round(lift.estimated1rm * 1.5);
-            violations.push(`${ex.name}: ${ex.weight_kg}kg exceeds 1.5× est 1RM, clamped to ${cap}kg`);
+            issue("LOAD_CEILING", `${ex.name}: ${ex.weight_kg}kg exceeds 1.5× est 1RM, clamped to ${cap}kg`);
             ex.weight_kg = cap;
           } else if (ex.weight_kg > ABSOLUTE_LOAD_CAP_KG) {
-            violations.push(`${ex.name}: ${ex.weight_kg}kg exceeds the ${ABSOLUTE_LOAD_CAP_KG}kg sanity cap, clamped`);
+            issue("ABSOLUTE_LOAD", `${ex.name}: ${ex.weight_kg}kg exceeds the ${ABSOLUTE_LOAD_CAP_KG}kg sanity cap, clamped`);
             ex.weight_kg = ABSOLUTE_LOAD_CAP_KG;
           }
         }
@@ -422,7 +436,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         // 48h recovery: flag hard loading of a recently-trained muscle.
         const muscle = muscleOf(ex);
         if (!warm && ctx.muscleGroupsLast48h.includes(muscle) && (ex.weight_kg ?? 0) > 0) {
-          violations.push(`${ex.name}: loads ${muscle}, trained in the last 48h, should be recovering`);
+          issue("MUSCLE_RECOVERY", `${ex.name}: loads ${muscle}, trained in the last 48h, should be recovering`);
         }
 
         if (!warm) prescribedSetsByMuscle[muscle] = (prescribedSetsByMuscle[muscle] ?? 0) + workingSets(ex);
@@ -435,7 +449,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     for (const [muscle, prescribed] of Object.entries(prescribedSetsByMuscle)) {
       const total = (ctx.weeklySetsByMuscle[muscle] ?? 0) + prescribed;
       if (total > setLandmark) {
-        violations.push(`${muscle}: ${total} weekly sets exceeds the ~${setLandmark}-set landmark (junk volume)`);
+        issue("WEEKLY_VOLUME", `${muscle}: ${total} weekly sets exceeds the ~${setLandmark}-set landmark (junk volume)`);
       }
     }
   }
@@ -464,11 +478,11 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     }
     const hardMins = tempoMins + vo2Mins;
     if (hardMins > 40) {
-      violations.push(
+      issue("QUALITY_DURATION", 
         `${Math.round(hardMins)} min of Z3+ work in one session is over the 40-min quality ceiling (one quality block per day)`,
       );
     } else if (tempoMins >= 20 && vo2Mins >= 10) {
-      violations.push(
+      issue("MIXED_QUALITY", 
         `a full threshold block (${Math.round(tempoMins)} min) AND a full VO2 block (${Math.round(vo2Mins)} min) in one session; pick one quality focus per day`,
       );
     }
@@ -477,10 +491,10 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
   // Endurance readiness: a hard session on a depleted athlete is a red flag.
   if (isHardSession(corrected)) {
     if (ctx.tsb < -20) {
-      violations.push(`hard session prescribed while very fatigued (TSB ${ctx.tsb.toFixed(0)}), favor easy/recovery`);
+      issue("FATIGUE", `hard session prescribed while very fatigued (TSB ${ctx.tsb.toFixed(0)}), favor easy/recovery`);
     }
     if (ctx.daysSinceLastHard <= 1) {
-      violations.push(`hard session ${ctx.daysSinceLastHard}d after the last hard effort, back-to-back quality`);
+      issue("HARD_SPACING", `hard session ${ctx.daysSinceLastHard}d after the last hard effort, back-to-back quality`);
     }
   }
 
@@ -518,7 +532,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
       }
     }
     if (corrected.rpe_target > rpeCap) corrected.rpe_target = rpeCap;
-    violations.push(
+    issue("READINESS_CAP", 
       rpeCap === 6
         ? `moderate recovery (${r}/100, amber), quality capped to easy aerobic (Z2, RPE ≤6)`
         : `low readiness (${r ?? "?"}/100) / TSB ${ctx.tsb.toFixed(0)}, capped to easy aerobic (Z2, RPE ≤${rpeCap})`,
@@ -553,5 +567,5 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     }
   }
 
-  return { violations, corrected, tssReplaced, unsafe };
+  return { violations, issues, corrected, tssReplaced, unsafe };
 }

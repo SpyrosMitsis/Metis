@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
         .select("date, hrv_rmssd, resting_hr, sleep_score, vo2max, weight_kg, body_fat_pct, lean_mass_kg")
         .eq("user_id", userId).gte("date", since90).lte("date", today).order("date", { ascending: true })
         .then((r) => r, () => ({ data: null, error: true })),
-      admin.from("completed_activities").select("date, type, distance_m, tss, ctl, atl, data_json")
+      admin.from("effective_activities").select("date, type, distance_m, tss, ctl, atl, data_json, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", since14).lte("date", today).order("date", { ascending: true }),
       admin.from("planned_workouts").select("*").eq("user_id", userId).eq("date", today),
       admin.from("planned_workouts").select("date, type, workout_json, completed")
@@ -203,7 +203,7 @@ Deno.serve(async (req) => {
     try {
       const sinceYesterday = new Date(anchorMs - DAY).toISOString().slice(0, 10);
       const [{ data: analyzedActs }, { data: analyzedStrength }] = await Promise.all([
-        admin.from("completed_activities").select("id, date, type, analysis_json")
+        admin.from("effective_activities").select("id, date, type, analysis_json, planned_workout_id, link_source")
           .eq("user_id", userId).not("analysis_json", "is", null)
           .gte("date", sinceYesterday).lte("date", today)
           .order("date", { ascending: false }).limit(2),

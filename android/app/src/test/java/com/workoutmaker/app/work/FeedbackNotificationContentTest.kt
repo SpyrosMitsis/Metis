@@ -61,7 +61,7 @@ class FeedbackNotificationContentTest {
         val f = FeedbackNotificationContent::typeLooksLike
         assertTrue(f("run", "Run"))
         assertTrue(f("run", "VirtualRun"))
-        assertTrue(f("run", "Walk"))
+        assertFalse(f("run", "Walk"))
         assertTrue(f("ride", "VirtualRide"))
         assertTrue(f("ride", "Cycling"))
         assertTrue(f("swim", "OpenWaterSwim"))

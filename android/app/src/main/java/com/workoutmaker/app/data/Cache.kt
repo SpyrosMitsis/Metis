@@ -9,6 +9,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
+import androidx.room.Transaction
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -80,6 +81,12 @@ interface CacheDao {
     // background refresh can't wipe cached history older than fromDate.
     @Query("DELETE FROM cached_workout WHERE date >= :fromDate")
     suspend fun clearWorkoutsFrom(fromDate: String)
+
+    @Transaction
+    suspend fun replaceWorkoutsFrom(fromDate: String, items: List<CachedWorkout>) {
+        clearWorkoutsFrom(fromDate)
+        upsertWorkouts(items)
+    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSummary(summary: CachedSummary)

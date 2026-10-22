@@ -102,7 +102,7 @@ export default function CalendarPage() {
     queryKey: ["activities", monthStart],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("completed_activities").select("*")
+        .from("effective_activities").select("*")
         .gte("date", monthStart).lte("date", monthEnd)
         .order("date", { ascending: false });
       if (error) throw error;
@@ -244,24 +244,13 @@ export default function CalendarPage() {
       await api.syncIntervals().catch(() => {}); // best-effort fresh actuals
       const td = todayIso();
       const ws = mondayOf(td);
-      const [{ data: pw }, { data: acts }] = await Promise.all([
-        supabase.from("planned_workouts").select("*").gte("date", ws).lte("date", td),
-        supabase.from("completed_activities").select("date, type").gte("date", ws).lte("date", td),
-      ]);
-      const byDate = new Map<string, string[]>();
-      for (const a of (acts ?? []) as { date: string; type: string | null }[]) {
-        const arr = byDate.get(a.date) ?? [];
-        arr.push(a.type ?? "");
-        byDate.set(a.date, arr);
-      }
-      let reconciled = 0;
-      let missed = 0;
-      for (const p of (pw ?? []) as PlannedWorkout[]) {
-        if (p.completed || p.locked || p.type === "rest" || p.date >= td) continue;
-        const did = (byDate.get(p.date) ?? []).some((t) => looksLike(p.type, t));
-        if (did) { await supabase.from("planned_workouts").update({ completed: true }).eq("id", p.id); reconciled++; }
-        else missed++;
-      }
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth.user) throw new Error("Sign in again");
+      const { error } = await supabase.rpc("reconcile_sessions", { p_owner: auth.user.id });
+      if (error) throw error;
+      const { data: pw } = await supabase.from("reconciled_plans").select("*").gte("date",ws).lte("date",td);
+      const reconciled = (pw ?? []).filter(p => p.activity_ids?.length).length;
+      const missed = (pw ?? []).filter(p => p.skipped).length;
       await api.planWeek(td);
       return { reconciled, missed };
     },

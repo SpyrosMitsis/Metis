@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -162,7 +164,7 @@ fun AuthGate(vm: AuthViewModel = hiltViewModel(), content: @Composable () -> Uni
         label = "authGate",
     ) { state ->
         when (state) {
-            GateState.App -> OnboardingGate(content)
+            GateState.App -> androidx.compose.runtime.key(vm.repo.auth.currentUserOrNull()?.id) { OnboardingGate(content) }
             GateState.Login -> LoginScreen(vm)
             GateState.Spinner -> CenteredSpinner()
         }
@@ -188,6 +190,15 @@ private fun OnboardingGate(
     // instead of serving the previous user's cached answer.
     LaunchedEffect(vm.currentUserId()) { vm.recheck() }
     val complete by vm.complete.collectAsStateSafe()
+    val accountError by vm.accountError.collectAsStateSafe()
+    if (accountError != null) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            androidx.compose.material3.Text(accountError!!)
+            androidx.compose.material3.Button(onClick = { vm.recheck() }) { androidx.compose.material3.Text("Retry") }
+        }
+        return
+    }
     when (complete) {
         true -> content()
         false -> OnboardingScreen(vm)

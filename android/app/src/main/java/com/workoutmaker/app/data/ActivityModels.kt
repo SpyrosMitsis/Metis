@@ -26,6 +26,15 @@ data class ManualActivityInsert(
 @Serializable
 data class HcActivityInsert(
     val intervals_id: String,
+    val source: String = "health_connect",
+    val source_id: String? = null,
+    val started_at: String? = null,
+    val ended_at: String? = null,
+    val start_local_date: String? = null,
+    val end_local_date: String? = null,
+    val timezone_name: String? = null,
+    val timezone_provenance: String = "unavailable",
+    val data_json: JsonObject? = null,
     val type: String,
     val date: String,
     val duration_seconds: Int? = null,
@@ -50,6 +59,15 @@ data class CompletedActivity(
     val ctl: Double? = null,
     val atl: Double? = null,
     val data_json: JsonObject? = null,
+    val planned_workout_id: String? = null,
+    val link_source: String? = null,
+    val session_state: String = "unknown",
+    val content_revision: Long = 1,
+    val session_group_id: String? = null,
+    val started_at: String? = null,
+    val ended_at: String? = null,
+    val timezone_provenance: String = "unavailable",
+    val measurement_provenance: JsonObject? = null,
 ) {
     val isManual: Boolean get() = intervals_id.startsWith("manual:")
     val distanceKm: Double? get() = distance_m?.let { it / 1000.0 }

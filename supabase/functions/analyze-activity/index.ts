@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
 
     const admin = adminClient();
     const { data: act } = await admin
-      .from("completed_activities")
+      .from("effective_activities")
       .select("*")
       .eq("id", activityId)
       .eq("user_id", userId)

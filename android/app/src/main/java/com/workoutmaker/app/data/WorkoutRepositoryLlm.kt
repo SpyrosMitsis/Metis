@@ -1,5 +1,7 @@
 package com.workoutmaker.app.data
 
+import com.workoutmaker.app.util.runCatching
+
 import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
 import io.ktor.client.call.body
@@ -31,7 +33,7 @@ suspend fun WorkoutRepository.planStatus(): PlanStatus = runCatching {
     )
 }.logFailure("planStatus").getOrDefault(PlanStatus())
 
-suspend fun WorkoutRepository.setUseHostedAi(on: Boolean) {
+suspend fun WorkoutRepository.setUseHostedAi(on: Boolean) = withAccount {
     supabase.postgrest.from("user_profiles").update({ set("use_hosted_ai", on) }) {
         filter { eq("id", uid()) }
     }
@@ -40,7 +42,7 @@ suspend fun WorkoutRepository.setUseHostedAi(on: Boolean) {
 
 // Server-side verification of a Play purchase; the fn is the only writer
 // of the plan columns. Returns the resulting plan ("pro" on success).
-suspend fun WorkoutRepository.verifyPurchase(purchaseToken: String): String {
+suspend fun WorkoutRepository.verifyPurchase(purchaseToken: String): String = withAccount {
     val body = buildJsonObject {
         put("purchase_token", JsonPrimitive(purchaseToken))
     }.toString()
@@ -49,7 +51,7 @@ suspend fun WorkoutRepository.verifyPurchase(purchaseToken: String): String {
     )
     invalidateProfileCache()
     (res["error"] as? JsonPrimitive)?.contentOrNull?.let { throw IllegalStateException(it) }
-    return (res["plan"] as? JsonPrimitive)?.contentOrNull ?: "free"
+    return@withAccount (res["plan"] as? JsonPrimitive)?.contentOrNull ?: "free"
 }
 
 // Per-1M-token prices for the custom (BYO) provider, so its spend isn't $0.
@@ -60,7 +62,7 @@ suspend fun WorkoutRepository.customLlmPricing(): Pair<Double?, Double?> = runCa
     inp to out
 }.logFailure("customLlmPricing").getOrDefault(null to null)
 
-suspend fun WorkoutRepository.setCustomLlmPricing(inputPer1M: Double?, outputPer1M: Double?) {
+suspend fun WorkoutRepository.setCustomLlmPricing(inputPer1M: Double?, outputPer1M: Double?) = withAccount {
     val obj = buildJsonObject {
         put("llm_custom_input_per_1m", inputPer1M?.let { JsonPrimitive(it) } ?: JsonNull)
         put("llm_custom_output_per_1m", outputPer1M?.let { JsonPrimitive(it) } ?: JsonNull)
@@ -69,7 +71,7 @@ suspend fun WorkoutRepository.setCustomLlmPricing(inputPer1M: Double?, outputPer
     invalidateProfileCache()
 }
 
-suspend fun WorkoutRepository.setActiveProvider(provider: LlmProvider) {
+suspend fun WorkoutRepository.setActiveProvider(provider: LlmProvider) = withAccount {
     supabase.postgrest.from("user_profiles").update(mapOf("active_llm_provider" to provider.key)) {
         filter { eq("id", uid()) }
     }
@@ -95,7 +97,7 @@ suspend fun WorkoutRepository.modelOverrides(): Map<String, String> = runCatchin
         ?.toMap() ?: emptyMap()
 }.logFailure("modelOverrides").getOrDefault(emptyMap())
 
-suspend fun WorkoutRepository.setModelOverride(provider: LlmProvider, model: String?) {
+suspend fun WorkoutRepository.setModelOverride(provider: LlmProvider, model: String?) = withAccount {
     val current = modelOverrides().toMutableMap()
     if (model.isNullOrBlank()) current.remove(provider.key) else current[provider.key] = model
     val obj = buildJsonObject {

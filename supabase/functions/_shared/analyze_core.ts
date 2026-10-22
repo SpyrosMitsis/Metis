@@ -53,16 +53,8 @@ function logFeedbackCost(
 import { customExercises, muscleForName } from "./exercise_catalog.ts";
 import type { Workout } from "./types.ts";
 
-export function activityMatchesPlanned(plannedType: string, actualType: string | null): boolean {
-  const a = (actualType ?? "").toLowerCase();
-  switch (plannedType) {
-    case "run": return a.includes("run") || a.includes("walk");
-    case "ride": return a.includes("ride") || a.includes("bike") || a.includes("cycl");
-    case "swim": return a.includes("swim");
-    case "strength": return a.includes("weight") || a.includes("strength") || a.includes("gym") || a === "workout";
-    default: return false;
-  }
-}
+import { activityMatchesPlanned } from "./activity_matching.ts";
+export { activityMatchesPlanned } from "./activity_matching.ts";
 
 // deno-lint-ignore no-explicit-any
 type Row = Record<string, any>;
@@ -77,17 +69,10 @@ export async function runActivityAnalysis(
 ): Promise<Row> {
   const onboarding = profile?.onboarding ?? {};
 
-  // --- planned session that day (prefer a type match) ---------------------
-  const { data: plans } = await admin
-    .from("planned_workouts")
-    .select("id, type, workout_json")
-    .eq("user_id", userId)
-    .eq("date", act.date)
-    .neq("type", "rest");
-  // ONLY a same-sport plan counts. The old any-plan fallback graded a swim
-  // against the day's run (wrong targets, unwanted "vs plan" framing); with no
-  // matching plan the session is now analyzed on its own merits instead.
-  const plannedRow = (plans ?? []).find((p) => activityMatchesPlanned(p.type, act.type)) ?? null;
+  const { data: plannedRow } = act.planned_workout_id
+    ? await admin.from("planned_workouts").select("id,type,workout_json")
+      .eq("user_id", userId).eq("id", act.planned_workout_id).maybeSingle()
+    : { data: null };
   const planned = (plannedRow?.workout_json ?? null) as Workout | null;
 
   // --- streams + athlete zone settings ------------------------------------
@@ -238,7 +223,7 @@ export async function runActivityAnalysis(
       // "solid session" into "your fastest swim pace this month".
       let recentText = "";
       try {
-        const { data: recent } = await admin.from("completed_activities")
+        const { data: recent } = await admin.from("effective_activities")
           .select("date, distance_m, duration_seconds, avg_hr")
           .eq("user_id", userId)
           .neq("id", act.id)
@@ -334,13 +319,13 @@ Write 3-5 sentences of coach feedback. Every sentence must reference a concrete 
 const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 const namesMatch = (a: string, b: string) => {
   const na = normName(a), nb = normName(b);
-  return na === nb || na.includes(nb) || nb.includes(na);
+  return na.length > 0 && na === nb;
 };
 
 // Coverage matching for a completed strength session, substitution-aware. A
 // planned exercise is "covered" by a name match OR — failing that — by an
-// as-yet-unused logged exercise that hits the SAME muscle (a legitimate swap,
-// e.g. Preacher Curl for the planned Machine Bicep Curl). Matching is greedy and
+// as-yet-unused logged exercise that hits the SAME muscle (a possible swap,
+// not proof of equivalent stimulus). Matching is greedy and
 // 1:1 so one lift can't paper over two planned slots; "Other"/"Cardio"/unknown
 // muscles never substitute (too loose to be meaningful). Pure + unit-testable.
 export interface CoverageItem {
@@ -366,7 +351,7 @@ export function matchCoverage(
   const coveredBy: (string | null)[] = planned.map(() => null);
   const substitutions: { logged: string; planned: string }[] = [];
 
-  // Pass 1 — exact / substring name matches.
+  // Pass 1 — exact normalized names; equipment and movement variants are swaps.
   planned.forEach((pe, pi) => {
     const li = logged.findIndex((le, i) => !consumed.has(i) && namesMatch(pe.name, le.name));
     if (li >= 0) {
@@ -431,7 +416,7 @@ export async function fetchStrengthHrSeries(
   const [{ data: profile }, { data: watchActs }] = await Promise.all([
     admin.from("user_profiles")
       .select("intervals_athlete_id, intervals_api_key_encrypted").eq("id", userId).single(),
-    admin.from("completed_activities")
+    admin.from("effective_activities")
       .select("intervals_id, type").eq("user_id", userId).eq("date", date),
   ]);
   const watch = (watchActs ?? []).find((a) => activityMatchesPlanned("strength", a.type)) ?? null;
@@ -449,7 +434,7 @@ export async function runStrengthAnalysis(
       .eq("user_id", userId).eq("date", date).eq("type", "strength"),
     admin.from("strength_logs").select("exercise_name, sets, estimated_1rm, muscle_groups")
       .eq("user_id", userId).eq("date", date),
-    admin.from("completed_activities").select("intervals_id, type, duration_seconds, avg_hr, tss, data_json")
+    admin.from("effective_activities").select("intervals_id, type, duration_seconds, avg_hr, tss, data_json")
       .eq("user_id", userId).eq("date", date),
   ]);
 
@@ -512,15 +497,15 @@ export async function runStrengthAnalysis(
     );
 
     if (plannedExercises.length) {
-      // Substitution-aware coverage: a same-muscle swap counts as completed.
+      // Same-muscle coverage is a coarse proxy, not equivalent exercise completion.
       for (const ex of exercises) if (!ex.muscle) ex.muscle = muscleForName(ex.name, custom);
       const cov = matchCoverage(plannedExercises, exercises.map((ex) => ({ name: ex.name, muscle: ex.muscle })));
       substitutions = cov.substitutions;
 
-      // Annotate each covering logged exercise (name match or substitution) with
-      // its planned prescription so the load comparison still appears.
+      // Only compare prescribed load for the same exercise. A machine/dumbbell
+      // substitution cannot inherit another exercise's target kilograms.
       cov.coveredBy.forEach((loggedName, pi) => {
-        if (!loggedName) return;
+        if (!loggedName || cov.substitutions.some((s) => s.logged === loggedName)) return;
         const pe = plannedExercises[pi];
         const ex = exercises.find((e) => e.name === loggedName);
         if (ex) ex.planned = `${pe.sets}×${pe.reps}${pe.weight_kg ? ` @ ${pe.weight_kg}kg` : ""}`;
@@ -533,9 +518,9 @@ export async function runStrengthAnalysis(
         ? `, skipped: ${cov.skipped.slice(0, 3).join(", ")}${cov.skipped.length > 3 ? "…" : ""}`
         : "";
       components.push({
-        name: "Coverage",
+        name: "Muscle coverage",
         score: Math.round((cov.done / cov.total) * 100),
-        detail: `${cov.done} of ${cov.total} planned exercises completed${subText}${missText}`,
+        detail: `${cov.done} of ${cov.total} planned exercise slots covered by name or primary muscle; substitutions do not verify equivalent training${subText}${missText}`,
       });
 
       const plannedSets = plannedExercises.reduce((s, pe) => s + pe.sets, 0);
@@ -575,7 +560,7 @@ export async function runStrengthAnalysis(
         ? `Watch: ${watch.duration_seconds ? `${Math.round(watch.duration_seconds / 60)} min` : ""}${watch.avg_hr ? `, avg HR ${watch.avg_hr}` : ""}${watch.tss ? `, TSS ${Math.round(watch.tss)}` : ""}.`
         : "";
       const subsText = substitutions.length
-        ? `SUBSTITUTIONS (athlete swapped a same-muscle lift, these COUNT as completed, do NOT call them missed): ${
+        ? `POSSIBLE SUBSTITUTIONS (same primary muscle only; movement, dose and training goal equivalence are not verified): ${
           substitutions.map((s) => `${s.logged} for the planned ${s.planned}`).join("; ")
         }.`
         : "";
@@ -588,7 +573,7 @@ ${subsText}
 ${watchText}
 ${components.length ? `EXECUTION: ${components.map((c) => `${c.name} ${c.score}/100 (${c.detail})`).join("; ")}. Overall ${score}/100.` : ""}
 
-Write 3-5 sentences of specific coach feedback: completion vs the plan, load selection vs the prescription (under/over-shooting weights), anything notable about volume or exercise balance, and ONE concrete cue for the next session (e.g. which lift to progress and by how much). If the athlete substituted a same-muscle exercise, treat it as completed (acknowledge the swap, don't scold a miss). Plain prose, no headings, no bullet points.`;
+Write 3-5 sentences of specific coach feedback: completion vs the plan, load selection vs the prescription (under/over-shooting weights), anything notable about volume or exercise balance, and ONE concrete cue for the next session (e.g. which lift to progress and by how much). Acknowledge substitutions without scolding. The same primary muscle does not prove equivalent training. Never compare kilograms across different exercises or equipment; use that exercise's own history. Ask about the reason for a change when it affects the next prescription. Plain prose, no headings, no bullet points.`;
       const out = await llmGenerateWithFallback(
         chain,
         {
@@ -651,12 +636,12 @@ Write 3-5 sentences of specific coach feedback: completion vs the plan, load sel
 // Results are ready when the user opens the app or gets the evening prompt.
 export async function autoAnalyzeRecent(admin: SupabaseClient, userId: string): Promise<number> {
   let analyzed = 0;
-  const since = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+  const since = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10);
 
   // --- endurance -------------------------------------------------------------
   try {
     const { data: acts } = await admin
-      .from("completed_activities")
+      .from("effective_activities")
       .select("*")
       .eq("user_id", userId)
       .gte("date", since)
@@ -664,7 +649,7 @@ export async function autoAnalyzeRecent(admin: SupabaseClient, userId: string): 
       .order("date", { ascending: false });
     const endurance = (acts ?? []).filter((a) => {
       const t = (a.type ?? "").toLowerCase();
-      return t.includes("run") || t.includes("ride") || t.includes("bike") || t.includes("cycl");
+      return t.includes("run") || t.includes("ride") || t.includes("bike") || t.includes("cycl") || t.includes("swim");
     });
     if (endurance.length) {
       const { data: profile } = await admin
@@ -723,7 +708,7 @@ export async function autoAnalyzeRecent(admin: SupabaseClient, userId: string): 
         // Re-run only when the first analysis predates the watch recording.
         if (existing.analysis_json.watch != null) continue;
         const { data: w } = await admin
-          .from("completed_activities")
+          .from("effective_activities")
           .select("type")
           .eq("user_id", userId)
           .eq("date", date);

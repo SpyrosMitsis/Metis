@@ -328,3 +328,29 @@ Deno.test("goalRaceLine: nothing to say renders nothing, so callers can append i
   assertEquals(goalRaceLine({ name: "No date" }, "2026-08-09"), "");
   assertEquals(goalRaceLine({ name: "Last year", date: "2025-11-09" }, "2026-08-09"), "");
 });
+
+import { adherenceBlock } from "./context.ts";
+Deno.test("adherence uses one-to-one sport matching, explicit status and bounded actual load", async () => {
+  const plans = [
+    { date: "2026-10-20", type: "run", workout_json: { tss_estimate: 20 } },
+    { date: "2026-10-20", type: "run", workout_json: { tss_estimate: 20 } },
+    { date: "2026-10-19", type: "strength", completed: true, workout_json: { tss_estimate: 20 } },
+    { date: "2026-10-18", type: "ride", skipped: true, workout_json: { tss_estimate: 20 } },
+    { date: "2026-10-17", type: "run", workout_json: { tss_estimate: 20 } },
+  ];
+  const query = { select: () => query, eq: () => query, gte: () => query, lt: () => query,
+    neq: () => Promise.resolve({ data: plans }) };
+  const admin = { from: () => query } as unknown as SupabaseClient;
+  const result = await adherenceBlock(admin, "user", "2026-10-08", "2026-10-21", [
+    { date: "2026-10-20", type: "Run", tss: 20 },
+    { date: "2026-10-17", type: "Walk", tss: 10 },
+    { date: "2026-10-18", type: "Ride", tss: 20 },
+    { date: "2026-10-21", type: "Run", tss: 999 },
+    { date: "2026-10-07", type: "Run", tss: 999 },
+  ]);
+  assertStringIncludes(result, "1/5 explicitly completed; 1 additional same-sport");
+  assertStringIncludes(result, "2 other recorded activities");
+  assertStringIncludes(result, "Explicitly skipped: 2026-10-18 ride");
+  assertStringIncludes(result, "No matching recording: 2026-10-20 run; 2026-10-17 run");
+  assertStringIncludes(result, "~50% of planned load");
+});

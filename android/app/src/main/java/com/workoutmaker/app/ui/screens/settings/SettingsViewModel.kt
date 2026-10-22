@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.settings
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,7 +105,10 @@ internal val GOALS_BY_SPORT: Map<String, List<String>> = mapOf(
     "strength" to listOf("Build muscle", "Get stronger", "Lose fat", "Body recomposition", "General fitness"),
 )
 
-// Goals that warrant a dated goal-race entry (drives the goal-race step).
+// These labels describe a dated event, not a broad training intent. They stay
+// in the shared catalog for existing Settings profiles, but onboarding collects
+// them through the single optional target-event step instead of offering them
+// twice.
 internal val RACE_GOALS = setOf("5K", "10K", "Half Marathon", "Marathon", "Racing", "Faster times")
 
 // Experience is tracked per activity, with sport-appropriate rungs.
@@ -154,13 +159,12 @@ internal fun sportLabel(key: String): String = when (key) {
 // question belongs to the gym now and is added with the gym's other three, so
 // the gate is just "did they pick the gym", asked where the steps are built.
 
-// The goal-race step appears when any activity has a race-shaped goal.
-// A named race goal, or any concrete distance target: naming a distance is a
-// stronger signal than picking "Racing" off a list, so "is there a date on it?"
-// is exactly the right follow-up question.
-internal fun shouldAskGoalRace(p: TrainingProfile): Boolean =
-    p.goals_by_sport.values.any { goals -> goals.any { it in RACE_GOALS } } ||
-        p.distance_goal_km.values.any { it > 0 }
+// A target event is optional metadata ON TOP OF an endurance training goal.
+// Offer it to every endurance athlete, rather than making it appear only after
+// they picked a race-shaped label such as "10K". That keeps "I want to run
+// farther" distinct from "I am racing Copenhagen Half on this date".
+internal fun shouldOfferTargetEvent(p: TrainingProfile): Boolean =
+    p.sports.any { EnduranceGoals.isEndurance(it) }
 
 // Best-effort migration: assign each legacy flat goal to the activity whose
 // catalog lists it, so an existing account pre-fills the per-activity editors.
@@ -644,7 +648,9 @@ class SettingsViewModel @Inject constructor(
         testing.value = null
     }
 
-    fun signOut() = viewModelScope.launch { repo.signOut() }
+    fun signOut() = viewModelScope.launch {
+        runCatching { repo.signOut() }.onFailure { saveStatus.value = "Sign out failed: ${it.message}" }
+    }
 
     /** The signed-in address, for the Account screen's headline. Null when unknown. */
     fun userEmail(): String? = repo.auth.currentUserOrNull()?.email?.takeIf { it.isNotBlank() }

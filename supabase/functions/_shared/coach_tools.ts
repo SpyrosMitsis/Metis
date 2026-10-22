@@ -4,6 +4,7 @@
 // an observation. Works on any LLM the user has configured (no native
 // function-calling required).
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import type { InjuryEntry } from "./types.ts";
 
 import { computeRecovery } from "./recovery.ts";
 import { freshnessWord, recoveryWord } from "./prompt.ts";
@@ -38,7 +39,7 @@ async function feasibilityInputs(
   date: string,
 ): Promise<FeasibilityInput> {
   const since = iso(Date.now() - 28 * DAY);
-  const { data } = await admin.from("completed_activities")
+  const { data } = await admin.from("effective_activities")
     .select("date, distance_m, duration_seconds, ctl")
     .eq("user_id", userId).gte("date", since).order("date", { ascending: false });
   const acts = data ?? [];
@@ -266,6 +267,24 @@ export const TOOL_CATALOG: ToolDef[] = [
   {
     name: "resume_training", kind: "act", args: "{}", schema: NO_ARGS,
     description: "End an active training pause early. Use if the athlete says they're back / resuming sooner than the pause's original end date.",
+  },
+  {
+    name: "report_injury", kind: "act",
+    args: "{ area: string, pain?: number (1-10), severity?: 'mild'|'moderate'|'serious', detail?: string, days?: number }",
+    schema: {
+      type: "object",
+      properties: {
+        area: { type: "string", description: "Specific body area and side when known, e.g. 'left knee' or 'front of right knee'" },
+        pain: { type: "number", description: "Athlete's current pain from 1 (minimal) to 10 (severe), if they supplied it" },
+        severity: { type: "string", enum: ["mild", "moderate", "serious"], description: "Use only when the athlete clearly described severity; pain is preferred when they gave a 1-10 score" },
+        detail: { type: "string", description: "Useful context such as onset, trigger, swelling, sharpness, or what movement hurts" },
+        days: { type: "number", description: "Initial protection window in days; defaults to 7 and is capped at 60" },
+      },
+      required: ["area"],
+    },
+    description:
+      "Record a NEW or newly-described injury in the structured profile injuries list AND apply a dated training backoff in one atomic action. " +
+      "Call immediately when the athlete mentions pain or an injury; never use remember as a substitute. It is valid with only area: the coach should record first, then ask targeted questions for exact location, 1-10 pain, onset/trigger and red flags. Pain 7-10 or serious wording creates avoid protection; otherwise it creates ease protection until details arrive.",
   },
   {
     name: "set_injury_backoff", kind: "act",
@@ -577,7 +596,7 @@ export async function executeTool(
     switch (name) {
       case "get_fitness": {
         const since = iso(Date.now() - 28 * DAY);
-        const { data } = await admin.from("completed_activities")
+        const { data } = await admin.from("effective_activities")
           .select("date, tss, ctl, atl").eq("user_id", userId).gte("date", since)
           .order("date", { ascending: false });
         // No intervals-provided CTL? Fill estimated values from stored TSS so
@@ -608,7 +627,7 @@ export async function executeTool(
       case "get_recent_activities": {
         const days = Math.min(60, Math.max(1, Number(args.days) || 14));
         const since = iso(Date.now() - days * DAY);
-        const { data } = await admin.from("completed_activities")
+        const { data } = await admin.from("effective_activities")
           .select("type, date, distance_m, duration_seconds, avg_hr, tss")
           .eq("user_id", userId).gte("date", since).order("date", { ascending: false }).limit(40);
         const rows = (data ?? []).map((r) => ({
@@ -746,7 +765,7 @@ export async function executeTool(
       case "get_execution_analysis": {
         interface Comp { name: string; score: number; detail: string }
         interface Stored { score?: number; label?: string; components?: Comp[]; feedback?: string }
-        const { data: endu } = await admin.from("completed_activities")
+        const { data: endu } = await admin.from("effective_activities")
           .select("date, type, analysis_json")
           .eq("user_id", userId).not("analysis_json", "is", null)
           .order("date", { ascending: false }).limit(5);
@@ -889,6 +908,73 @@ export async function executeTool(
           effect: level === "avoid"
             ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
             : "the area is still trained, but hard zones and heavy loading through it are capped",
+        });
+      }
+      case "report_injury": {
+        // This deliberately combines profile capture with immediate protection.
+        // The old two-tool choreography (remember + set_injury_backoff) let a
+        // model successfully "remember" a knee injury without ever adding it
+        // to onboarding.injuries, so follow-ups and the Injury screen missed it.
+        const area = String(args.area ?? "").replace(/\s+/g, " ").trim();
+        if (!area) return "error: area is required";
+        const pain = typeof args.pain === "number" && Number.isFinite(args.pain)
+          ? Math.round(args.pain)
+          : null;
+        if (args.pain !== undefined && (pain === null || pain < 1 || pain > 10)) {
+          return "error: pain must be a whole number from 1 to 10";
+        }
+        const statedSeverity = args.severity;
+        if (statedSeverity !== undefined && statedSeverity !== "mild" && statedSeverity !== "moderate" && statedSeverity !== "serious") {
+          return "error: severity must be 'mild', 'moderate' or 'serious'";
+        }
+        const severity = pain === null
+          ? (statedSeverity ?? "")
+          : pain <= 3 ? "mild" : pain <= 6 ? "moderate" : "serious";
+        const detail = typeof args.detail === "string" ? args.detail.trim().slice(0, 240) : "";
+        const days = typeof args.days === "number" && Number.isFinite(args.days)
+          ? Math.min(60, Math.max(1, Math.round(args.days)))
+          : BACKOFF_DAYS;
+        const today = minDate;
+        const { data: p } = await admin.from("user_profiles")
+          .select("onboarding, injury_backoff").eq("id", userId).single();
+        const o = (p?.onboarding ?? {}) as Record<string, unknown>;
+        const existing = injuriesOf(o);
+        const sameArea = (i: InjuryEntry) => i.area.trim().toLowerCase() === area.toLowerCase();
+        const prior = existing.find(sameArea);
+        const entry: InjuryEntry = {
+          area: prior?.area || area,
+          severity: severity || prior?.severity || "",
+          note: detail || prior?.note,
+          raised_at: prior?.raised_at || today,
+          status: "present",
+        };
+        const injuries = prior
+          ? existing.map((i) => sameArea(i) ? entry : i)
+          : [...existing, entry];
+        // A severe report is structurally avoided; all other reports get a
+        // reversible ease-level cap while the coach gathers the missing detail.
+        const level = severity === "serious" ? "avoid" : "ease";
+        const backoffs = upsertBackoff(activeBackoffs(p?.injury_backoff, today), {
+          area: entry.area,
+          level,
+          until: addDays(today, days),
+          reason: detail || undefined,
+          set_at: today,
+        });
+        await admin.from("user_profiles").update({
+          onboarding: { ...o, injuries },
+          injury_backoff: backoffs,
+        }).eq("id", userId);
+        return JSON.stringify({
+          ok: true,
+          created: !prior,
+          injury: { area: entry.area, severity: entry.severity || null, detail: entry.note ?? null },
+          protection: level,
+          until: addDays(today, days),
+          next_questions: ["exact location / side", "pain 1-10", "what triggers it and when it began"],
+          effect: level === "avoid"
+            ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
+            : "hard zones and heavy loading through this area are capped while you clarify the injury",
         });
       }
       case "clear_injury_backoff": {

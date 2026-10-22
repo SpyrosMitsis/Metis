@@ -1,3 +1,4 @@
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // sync-intervals — pull + cache activities and CTL/ATL/TSB from Intervals.icu.
 //
 // Two modes:
@@ -37,6 +38,19 @@ interface SyncResult {
 }
 
 async function syncUser(admin: SupabaseClient, userId: string): Promise<SyncResult> {
+  await admin.from("activity_sync_state").upsert({ user_id: userId, source: "intervals", last_attempt_at: new Date().toISOString(), last_error: null }, { onConflict: "user_id,source" });
+  try {
+    const result = await syncUserData(admin,userId);
+    await admin.from("activity_sync_state").upsert({ user_id:userId, source:"intervals", last_success_at:new Date().toISOString(),
+      coverage_from:new Date(Date.now()-60*86400000).toISOString().slice(0,10),coverage_to:new Date().toISOString().slice(0,10),last_error:null },{onConflict:"user_id,source"});
+    await drainCalendarOutbox(admin,userId);
+    return result;
+  } catch(e) {
+    await admin.from("activity_sync_state").upsert({user_id:userId,source:"intervals",last_error:e instanceof Error ? e.message : String(e)},{onConflict:"user_id,source"});
+    throw e;
+  }
+}
+async function syncUserData(admin: SupabaseClient, userId: string): Promise<SyncResult> {
   const { data: profile, error } = await admin
     .from("user_profiles")
     .select("intervals_athlete_id, intervals_api_key_encrypted")
@@ -58,11 +72,15 @@ async function syncUser(admin: SupabaseClient, userId: string): Promise<SyncResu
   const rows = activities.map((a) => ({
     user_id: userId,
     intervals_id: a.id,
+    source: "intervals",
+    source_id: a.id,
+    start_local_date: a.start_date_local?.slice(0,10) ?? null,
+    timezone_provenance: a.start_date_local ? "provider_local_date" : "unavailable",
     type: a.type ?? null,
     date: a.start_date_local?.slice(0, 10) ?? null,
     duration_seconds: a.moving_time ?? null,
     distance_m: a.distance ?? null,
-    avg_hr: a.average_heartrate ? Math.round(a.average_heartrate) : null,
+    avg_hr: a.average_heartrate != null ? Math.round(a.average_heartrate) : null,
     tss: a.icu_training_load ?? null,
     ctl: a.icu_ctl ?? null,
     atl: a.icu_atl ?? null,
@@ -119,6 +137,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     if (body?.all_users) {
+      if (req.headers.get("Authorization") !== `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`) return json({error:"unauthorized"},401);
       // Cron path. Best-effort per user; one failure doesn't abort the batch.
       const { data: users } = await admin
         .from("user_profiles")

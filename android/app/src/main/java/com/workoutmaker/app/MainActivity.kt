@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import io.github.jan.supabase.gotrue.auth
-import io.github.jan.supabase.gotrue.handleDeeplinks
+import com.workoutmaker.app.util.runCatching
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -126,13 +126,10 @@ class MainActivity : ComponentActivity() {
                 }
             return
         }
-        supabase.handleDeeplinks(intent) { session ->
-            // The imported session may belong to a different user than the
-            // cached profile row (e.g. confirming a brand-new account).
-            repo.onSessionImported()
-            if (session.type == "recovery" || data.path?.contains("reset") == true) {
-                AuthDeepLinks.recoveryPending.value = true
-            }
+        lifecycleScope.launch {
+            runCatching { repo.importAuthLink(data) }
+                .onSuccess { recovery -> if (recovery) AuthDeepLinks.recoveryPending.value = true }
+                .onFailure { AuthDeepLinks.message.value = "That sign-in link could not be opened. Please try again." }
         }
     }
 

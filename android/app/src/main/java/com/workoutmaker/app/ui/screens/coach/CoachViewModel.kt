@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.coach
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue

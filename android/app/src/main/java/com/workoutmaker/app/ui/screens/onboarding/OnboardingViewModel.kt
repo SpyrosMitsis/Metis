@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.onboarding
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -58,6 +60,7 @@ class OnboardingViewModel @Inject constructor(
     private val deviceCalendar: DeviceCalendarManager,
 ) : ViewModel() {
     val complete = MutableStateFlow<Boolean?>(null)
+    val accountError = MutableStateFlow<String?>(null)
     val step = MutableStateFlow(0)
     val profile = MutableStateFlow(TrainingProfile())
     val keyStatus = MutableStateFlow<String?>(null)
@@ -118,9 +121,15 @@ class OnboardingViewModel @Inject constructor(
         val uid = currentUserId()
         if (uid != checkedUid) complete.value = null
         checkedUid = uid
-        repo.ensureAccountScope()
-        complete.value = repo.isOnboardingComplete()
-        refreshBilling()
+        accountError.value = null
+        runCatching {
+            repo.ensureAccountScope()
+            complete.value = repo.isOnboardingComplete()
+            refreshBilling()
+        }.onFailure {
+            complete.value = null
+            accountError.value = "Couldn't prepare your account data. Please retry."
+        }
     }
 
     fun buyPro(activity: Activity) = viewModelScope.launch {

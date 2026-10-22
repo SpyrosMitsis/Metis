@@ -79,3 +79,6 @@ verify_jwt = true
 # Pub/Sub push can't send a Supabase JWT; auth is the ?secret= in the endpoint URL.
 [functions.play-rtdn]
 verify_jwt = false
+
+[functions.sync-calendar]
+verify_jwt = true

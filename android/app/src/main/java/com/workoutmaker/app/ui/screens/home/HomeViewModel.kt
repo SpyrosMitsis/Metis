@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.home
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
@@ -468,12 +470,14 @@ class HomeViewModel @Inject constructor(
         if (!submittingFeedback.compareAndSet(false, true)) return@launch
         val today = summary.value?.today_workout
         val date = LocalDate.now().toString()
+        val feedbackId = java.util.UUID.randomUUID().toString()
+        val owner = repo.auth.currentUserOrNull()?.id
         runCatching {
             if (today?.id != null) {
-                repo.markPlannedComplete(today.id, date, completed = true, difficulty = difficulty, rpe = rpe)
+                repo.markPlannedComplete(today.id, date, completed = true, difficulty = difficulty, rpe = rpe, feedbackId = feedbackId)
             } else {
                 repo.submitFeedback(
-                    WorkoutFeedback(date = date, completed = true, actual_rpe = rpe, difficulty = difficulty),
+                    WorkoutFeedback(id = feedbackId, date = date, completed = true, actual_rpe = rpe, difficulty = difficulty),
                 )
             }
         }.onSuccess {
@@ -485,7 +489,7 @@ class HomeViewModel @Inject constructor(
             feedbackStatus.value = painNote ?: "✓ Marked done, your next workout will adapt."
             repo.refreshMemory()
             load()
-        }.onFailure { queueFeedback(date, rpe, difficulty, today?.id, true, pain) }
+        }.onFailure { queueFeedback(date, rpe, difficulty, today?.id, true, pain, feedbackId, owner) }
         submittingFeedback.value = false
     }
 
@@ -509,6 +513,8 @@ class HomeViewModel @Inject constructor(
         plannedId: String?,
         completed: Boolean,
         pain: Int?,
+        feedbackId: String = java.util.UUID.randomUUID().toString(),
+        owner: String? = repo.auth.currentUserOrNull()?.id,
     ) {
         FeedbackSyncWorker.request(
             appContext,
@@ -516,6 +522,8 @@ class HomeViewModel @Inject constructor(
             rpe = rpe,
             difficulty = difficulty,
             notes = null,
+            ownerUid = owner,
+            feedbackId = feedbackId,
             plannedId = plannedId,
             completed = completed,
             painArea = summary.value?.pain_check?.area.takeIf { pain != null },

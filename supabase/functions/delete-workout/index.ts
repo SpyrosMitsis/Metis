@@ -1,3 +1,4 @@
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // delete-workout — delete a planned workout and remove its Intervals.icu
 // calendar event (so it also disappears from the connected watch).
 //
@@ -27,21 +28,6 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!planned) return json({ error: "workout not found" }, 404);
 
-    // Best-effort: remove the watch/calendar event if it was pushed.
-    if (planned.intervals_event_id) {
-      const { data: profile } = await admin
-        .from("user_profiles")
-        .select("intervals_athlete_id, intervals_api_key_encrypted")
-        .eq("id", userId)
-        .single();
-      if (profile?.intervals_athlete_id && profile?.intervals_api_key_encrypted) {
-        const apiKey = await decryptSecret(admin, profile.intervals_api_key_encrypted);
-        if (apiKey) {
-          try { await deleteEvent(profile.intervals_athlete_id, apiKey, planned.intervals_event_id); } catch (_e) { /* ignore */ }
-        }
-      }
-    }
-
     const { error } = await admin
       .from("planned_workouts")
       .delete()
@@ -49,7 +35,8 @@ Deno.serve(async (req) => {
       .eq("user_id", userId);
     if (error) return json({ error: error.message }, 500);
 
-    return json({ ok: true });
+    const sync = await drainCalendarOutbox(admin, userId);
+    return json({ ok: true, sync_error: sync.error });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 500);
   }
