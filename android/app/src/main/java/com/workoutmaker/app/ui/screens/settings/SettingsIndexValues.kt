@@ -295,6 +295,7 @@ internal fun settingsRowValue(id: String, s: SettingsSnapshot): SettingsRowValue
         "defaults" -> SettingsRowValue(
             "${if (s.settings.units == WeightUnit.KG) "kg" else "lb"} · ${restLabel(s.settings.defaultRestSec)} rest",
         )
+        "tour" -> SettingsRowValue("6 features")
         "appearance" -> SettingsRowValue("${s.settings.themePalette.label} · ${s.settings.themeMode.label}")
         "data" -> SettingsRowValue("Import · export")
         "diagnostics" -> SettingsRowValue(

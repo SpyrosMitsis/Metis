@@ -185,7 +185,13 @@ private suspend fun WorkoutRepository.ingestHcExercises(): Int {
                 timezone_name = s.timezoneName,
                 timezone_provenance = s.timezoneProvenance,
                 data_json = kotlinx.serialization.json.buildJsonObject {
-                    put("origin", kotlinx.serialization.json.JsonPrimitive(s.origin))
+                    s.origin?.let { put("origin", kotlinx.serialization.json.JsonPrimitive(it)) }
+                },
+                measurement_provenance = kotlinx.serialization.json.buildJsonObject {
+                    put("duration_seconds", kotlinx.serialization.json.JsonPrimitive("observed"))
+                    put("distance_m", kotlinx.serialization.json.JsonPrimitive(if (s.distanceM == null) "unavailable" else "observed"))
+                    put("avg_hr", kotlinx.serialization.json.JsonPrimitive(if (s.avgHr == null) "unavailable" else "observed"))
+                    put("tss", kotlinx.serialization.json.JsonPrimitive("estimated"))
                 },
                 type = s.type,
                 date = s.date,

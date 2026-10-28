@@ -95,7 +95,7 @@ Deno.test("garbage exercise entries degrade to defaults instead of failing", () 
   assertEquals(exs[1].reps, "10"); // numeric reps coerced to string
 });
 
-Deno.test("week plan: invalid day degrades to rest, not failure", () => {
+Deno.test("week plan: invalid day rejects the complete plan", () => {
   const v = validateWeekPlan({
     week_focus: "Build",
     rationale: "because",
@@ -104,12 +104,30 @@ Deno.test("week plan: invalid day degrades to rest, not failure", () => {
       { date: "2026-06-16", weekday: "Tue", session: { type: "swim" } },
     ],
   });
-  assert(v.ok);
-  assertEquals(v.plan!.days.length, 2);
-  assertEquals(v.plan!.days[1].session.type, "rest");
+  assert(!v.ok);
+  assert(v.error!.includes("days.1.session"));
 });
 
 Deno.test("week plan: missing days fails", () => {
   assert(!validateWeekPlan({ week_focus: "x", days: [] }).ok);
   assert(!validateWeekPlan("nope").ok);
+});
+
+Deno.test("optional boolean encodings never replace a named timed exercise with a placeholder", () => {
+ for (const [value, expected] of [[0,false],[1,true],["false",false],["true",true],[null,undefined],[undefined,undefined]] as const) {
+  const v=validateWorkout(runWorkout({sections:[{name:"Warmup",duration_minutes:5,exercises:[{
+   name:"Easy warm-up",sets:1,reps:"5 min",pace_zone:"Z1",dose:{work_seconds:300,recovery_after_last:value,transition_seconds:null},
+  }]}]}));
+  assert(v.ok,JSON.stringify(v));
+  const e=v.workout!.sections[0].exercises[0];
+  assertEquals(e.name,"Easy warm-up");assertEquals(e.reps,"5 min");assertEquals(e.dose?.work_seconds,300);
+  assertEquals(e.dose?.recovery_after_last,expected);
+ }
+});
+
+Deno.test("malformed dose objects fail with their field path instead of erasing an entire exercise or section", () => {
+ for(const dose of [{recovery_after_last:"sometimes"},{work_seconds:-10},{transition_seconds:-1}]) {
+  const v=validateWorkout(runWorkout({sections:[{name:"Main Set",duration_minutes:20,exercises:[{name:"Steady running",sets:1,reps:"20 min",dose}]}]}));
+  assert(!v.ok);assert(v.error?.includes("dose"),v.error);
+ }
 });

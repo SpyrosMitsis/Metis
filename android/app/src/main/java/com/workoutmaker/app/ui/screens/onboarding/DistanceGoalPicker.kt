@@ -379,9 +379,8 @@ private fun PacePanel(sport: String, paceSec: Int, onPace: (Int) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            // Minus is always slower and plus always faster, whichever way the
-            // displayed unit happens to count.
-            StepperButton(Icons.Filled.Remove, "Slower") { onPace(EnduranceGoals.stepPace(sport, paceSec, faster = false)) }
+            // Minus and plus follow the displayed number in every unit.
+            StepperButton(Icons.Filled.Remove, "Decrease ${EnduranceGoals.paceCaption(sport).lowercase()}") { onPace(EnduranceGoals.stepPaceValue(sport, paceSec, increase = false)) }
             Row(
                 Modifier.width(96.dp),
                 horizontalArrangement = Arrangement.Center,
@@ -399,7 +398,7 @@ private fun PacePanel(sport: String, paceSec: Int, onPace: (Int) -> Unit) {
                     modifier = Modifier.padding(start = 4.dp, bottom = 3.dp),
                 )
             }
-            StepperButton(Icons.Filled.Add, "Faster") { onPace(EnduranceGoals.stepPace(sport, paceSec, faster = true)) }
+            StepperButton(Icons.Filled.Add, "Increase ${EnduranceGoals.paceCaption(sport).lowercase()}") { onPace(EnduranceGoals.stepPaceValue(sport, paceSec, increase = true)) }
         }
         Slider(
             value = EnduranceGoals.paceFraction(sport, paceSec),

@@ -183,7 +183,13 @@ internal fun StrengthHomeView(
         // Today's planned strength session(s) from the calendar — the plan is
         // the headline of this tab when one exists.
         todayPlanned.forEach { pw ->
-            TodayPlannedCard(modifier, pw, onStart = { vm.startPlannedFromHome(pw) })
+            val undoing by vm.undoingPlanned.collectAsStateSafe()
+            TodayPlannedCard(
+                modifier, pw,
+                onStart = { vm.startPlannedFromHome(pw) },
+                onMarkUndone = { vm.markPlannedUndone(pw.id) },
+                undoEnabled = undoing == null,
+            )
         }
 
         // Start actions: AI generate is the primary path; empty/repeat are the
@@ -267,11 +273,14 @@ internal fun TodayPlannedCard(
     modifier: Modifier,
     pw: PlannedWorkout,
     onStart: () -> Unit,
+    onMarkUndone: () -> Unit,
+    undoEnabled: Boolean = true,
 ) {
     SectionCard(modifier, title = "Today's plan") {
         WorkoutDetail(pw.workout_json)
         if (pw.completed) {
             Text("✓ Completed", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            TextButton(onClick = onMarkUndone, enabled = undoEnabled) { Text("Mark as not done") }
         } else {
             Button(
                 onClick = onStart,

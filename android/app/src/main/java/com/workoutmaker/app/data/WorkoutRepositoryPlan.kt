@@ -8,6 +8,8 @@ import io.github.jan.supabase.postgrest.rpc
 import io.github.jan.supabase.postgrest.query.Order
 import io.ktor.client.call.body
 import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -22,7 +24,7 @@ suspend fun WorkoutRepository.plannedWorkouts(fromDate: String): List<PlannedWor
     // Row-tolerant decode: one schema-drifted workout_json must drop that row,
     // not fail the whole Calendar/Coach plan fetch (the cached path below
     // already does the same per-row).
-    val rows: List<PlannedWorkout> = supabase.postgrest.from("reconciled_plans").select {
+    val rows: List<PlannedWorkout> = supabase.postgrest.from("reconciled_session_plans").select {
         filter { gte("date", fromDate) }
         order("date", Order.DESCENDING)
     }.decodeList<JsonObject>().mapNotNull { el ->
@@ -154,10 +156,11 @@ suspend fun WorkoutRepository.scheduleTemplate(req: ScheduleRequest): ScheduleRe
     )
 
 suspend fun WorkoutRepository.submitFeedback(fb: WorkoutFeedback) = withAccount {
-    supabase.postgrest.rpc("save_workout_feedback", buildJsonObject {
-        put("p_owner", uid())
-        put("p_feedback", json.encodeToJsonElement(WorkoutFeedback.serializer(), fb))
-    })
+    supabase.functions.invoke("session-feedback") { contentType(ContentType.Application.Json); setBody(buildJsonObject {
+        put("today",java.time.LocalDate.now().toString())
+        put("feedback",json.encodeToJsonElement(WorkoutFeedback.serializer(),fb))
+    }.toString()) }.body<String>()
+
 }
 
 // Completion and feedback commit together; the same ID survives uncertain retries.
@@ -173,13 +176,8 @@ suspend fun WorkoutRepository.markPlannedComplete(
 // Undo a skip: restore the session and drop the skip feedback so the
 // planner doesn't count it against adherence.
 suspend fun WorkoutRepository.undoSkip(plannedId: String) = withAccount {
-    supabase.postgrest.from("planned_workouts")
-        .update(mapOf("skipped" to JsonPrimitive(false))) { filter { eq("id", plannedId) } }
-    runCatching {
-        supabase.postgrest.from("workout_feedback").delete {
-            filter { eq("planned_workout_id", plannedId); eq("completed", false) }
-        }
-    }.logFailure("undoSkip/feedback")
+    supabase.postgrest.rpc("undo_session_feedback",buildJsonObject { put("p_plan",plannedId) })
+
 }
 
 // Past activities pulled from Intervals.icu (or logged manually).
@@ -189,36 +187,20 @@ suspend fun WorkoutRepository.completedActivities(fromDate: String): List<Comple
         order("date", Order.DESCENDING)
     }.decodeList()
 
-// Adaptive re-planning: reconcile this week's plan against what was actually
-// done (per Intervals.icu), then re-plan from today factoring real load.
-// plan-week already feeds actual load + adherence into the LLM prompt, so
-// re-planning here intelligently accounts for over/under-training and swaps.
-suspend fun WorkoutRepository.adaptWeek(weekStart: String, today: String): AdaptResult = withAccount {
-    val planned = runCatching { plannedWorkouts(weekStart) }.logFailure("adaptWeek/planned").getOrDefault(emptyList())
-        .filter { it.date in weekStart..today }
-    // Persistent inference is evidence, never athlete-confirmed completion.
-    supabase.postgrest.rpc("reconcile_sessions", buildJsonObject { put("p_owner", uid()) })
-    val reconciled = planned.count { it.activity_ids.isNotEmpty() }
-    val missed = planned.count { it.skipped }
-    // Re-plan today → +6: deletes non-completed/non-locked in range and
-    // regenerates around what actually happened and your current fitness.
-    val attempt = runCatching { planWeek(PlanWeekRequest(start_date = today)) }.logFailure("adaptWeek/planWeek")
-    val r = attempt.getOrNull()
-    if (r == null || r.error != null) {
-        // Surface the function's real error (it travels in the exception body)
-        // instead of a blind "re-plan failed".
-        val why = r?.error
-            ?: attempt.exceptionOrNull()?.let { fnErrorMessage(it) }
-            ?: "re-plan failed"
-        return@withAccount AdaptResult(reconciled, missed, false,
-            "Reconciled $reconciled · $missed missed", why)
-    }
-    val parts = buildList {
-        if (reconciled > 0) add("✓ matched $reconciled to your actual sessions")
-        if (missed > 0) add("$missed planned session(s) you skipped")
-        add("re-planned the rest of your week around what you did")
-    }
-    return@withAccount AdaptResult(reconciled, missed, true, parts.joinToString(" · "))
+suspend fun WorkoutRepository.correctSession(activityId: String, planId: String?, status: String,
+    type: String?, duplicateId: String?, groupId: String?, revision: Long, unmergeId: String? = null) = withAccount {
+    require(persistedActivityId(activityId)) { "Activity must finish syncing before it can be edited" }
+    for (id in listOfNotNull(planId, duplicateId, groupId, unmergeId)) require(persistedActivityId(id)) { "Invalid session reference" }
+    supabase.postgrest.rpc("correct_session", buildJsonObject {
+        put("p_activity", activityId)
+        put("p_plan", planId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        put("p_state", status)
+        put("p_type", type?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        put("p_duplicate", duplicateId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        put("p_group", groupId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        put("p_revision", revision)
+        put("p_unmerge", unmergeId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+    })
 }
 
 // Log a session done off-watch so it feeds load/ACWR/adherence.
@@ -237,13 +219,13 @@ suspend fun WorkoutRepository.logManualActivity(date: String, type: String, dura
 }
 
 // "Adjust this workout" — revise an existing workout via the generator.
-suspend fun WorkoutRepository.adjustWorkout(base: Workout, instruction: String, date: String?): GenerateResult =
+suspend fun WorkoutRepository.adjustWorkout(base: Workout, instruction: String, date: String?, type: String = base.type): GenerateResult =
     json.decodeFromString(
         supabase.functions.invoke("generate-workout") {
             setBody(
                 json.encodeToString(
                     GenerateRequest.serializer(),
-                    GenerateRequest(date = date, adjustment = instruction, base_workout = base, push = true),
+                    GenerateRequest(date = date, type = type, adjustment = instruction, base_workout = base, push = true),
                 ),
             )
         }.body(),

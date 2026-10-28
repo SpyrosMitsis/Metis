@@ -128,7 +128,7 @@ internal fun WorkoutDetailExercise(name: String, sets: List<SetEntity>, onStats:
                     val mins = sets.sumOf { it.reps }
                     "Cardio · ${sets.size} interval(s) · $mins min"
                 } else {
-                    val vol = sets.filter { !it.isWarmup }.sumOf { it.weightKg * it.reps }
+                    val vol = sets.filter { !it.isWarmup && it.quantityUnit == "reps" }.sumOf { it.weightKg * it.reps }
                     "${ExerciseCatalog.muscleOf(name)} · ${sets.size} sets · ${vol.toInt()} kg"
                 }
                 Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -143,7 +143,7 @@ internal fun WorkoutDetailExercise(name: String, sets: List<SetEntity>, onStats:
                             color = if (s.isWarmup) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                     }
-                    Text(if (cardio) "${s.reps} min" else "${trimKg(s.weightKg)} kg × ${s.reps}",
+                    Text(if (cardio) "${s.reps} min" else "${trimKg(s.weightKg)} kg × ${s.reps} ${s.quantityUnit}",
                         style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.weight(1f))
                     s.rpe?.let { Text("RPE $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

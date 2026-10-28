@@ -121,6 +121,12 @@ class CoachContentTest {
         compose.onAllNodesWithText(PROPOSAL_BANNER).assertCountEquals(0)
     }
 
+    @Test fun bannerHiddenAfterReadingTodaysSavedWorkout() {
+        show(CoachState(messages = threadEndingIn(describesTheWeek), turnTools = listOf("get_today_plan")))
+        compose.onAllNodesWithText(PROPOSAL_BANNER).assertCountEquals(0)
+        compose.onAllNodesWithText("📅 Put it on my calendar").assertCountEquals(0)
+    }
+
     // Reopened from history: no tool record survives, so there is no live turn
     // to judge and nothing was proposed in this session.
     @Test fun bannerHiddenOnAThreadRestoredFromHistory() {

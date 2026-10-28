@@ -33,7 +33,7 @@ import com.workoutmaker.app.data.generateWorkout
 import com.workoutmaker.app.data.logStrengthSet
 
 // Domain types passed from the active-session ViewModel when a workout finishes.
-data class FinishedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "")
+data class FinishedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "", val quantityUnit: String = "reps")
 data class FinishedExercise(val name: String, val sets: List<FinishedSet>)
 
 // Cloud backup DTOs (timestamps are epoch millis to round-trip with Room).
@@ -43,9 +43,9 @@ data class FinishedExercise(val name: String, val sets: List<FinishedSet>)
 // whole restore/merge down with it. Nulls are coalesced to safe defaults when
 // mapped to Room (see toEntity below).
 @Serializable
-data class CloudWorkout(val id: String, val name: String? = null, val started_at: Long? = null, val ended_at: Long? = null, val duration_sec: Int? = null, val total_volume_kg: Double? = null, val note: String? = null)
+data class CloudWorkout(val id: String, val name: String? = null, val started_at: Long? = null, val ended_at: Long? = null, val duration_sec: Int? = null, val total_volume_kg: Double? = null, val note: String? = null, val planned_workout_id: String? = null)
 @Serializable
-data class CloudSet(val id: String, val workout_id: String, val exercise_name: String? = null, val muscle: String? = null, val idx: Int? = null, val weight_kg: Double? = null, val reps: Int? = null, val rpe: Int? = null, val is_warmup: Boolean? = null, val note: String? = null)
+data class CloudSet(val id: String, val workout_id: String, val exercise_name: String? = null, val muscle: String? = null, val idx: Int? = null, val weight_kg: Double? = null, val reps: Int? = null, val rpe: Int? = null, val is_warmup: Boolean? = null, val note: String? = null, val quantity_unit: String? = null)
 @Serializable
 data class CloudRoutine(val id: String, val name: String? = null, val created_at: Long? = null)
 @Serializable
@@ -54,11 +54,11 @@ data class CloudRoutineItem(val id: String, val routine_id: String, val exercise
 // Cloud -> Room, coalescing any null cloud values to safe defaults.
 private fun CloudWorkout.toEntity(synced: Boolean = true) = WorkoutEntity(
     id, name ?: "Workout", started_at ?: 0L, ended_at ?: (started_at ?: 0L),
-    duration_sec ?: 0, total_volume_kg ?: 0.0, note ?: "", synced,
+    duration_sec ?: 0, total_volume_kg ?: 0.0, note ?: "", synced, planned_workout_id,
 )
 private fun CloudSet.toEntity() = SetEntity(
     id, workout_id, exercise_name ?: "", muscle ?: "", idx ?: 0,
-    weight_kg ?: 0.0, reps ?: 0, rpe, is_warmup ?: false, note ?: "",
+    weight_kg ?: 0.0, reps ?: 0, rpe, is_warmup ?: false, note ?: "", quantity_unit ?: "reps",
 )
 private fun CloudRoutine.toEntity() = RoutineEntity(id, name ?: "Routine", created_at ?: 0L)
 private fun CloudRoutineItem.toEntity() = RoutineItemEntity(
@@ -103,6 +103,9 @@ class StrengthRepository @Inject constructor(
     suspend fun recentWorkouts(limit: Int = 50) = dao.recentWorkouts(limit)
     suspend fun setsForWorkout(id: String) = dao.setsForWorkout(id)
     suspend fun loggedExercises() = dao.loggedExercises()
+    suspend fun exerciseLogSummaries() = cloud.withAccount { dao.exerciseLogSummaries() }
+    suspend fun hiddenExerciseStats() = cloud.withAccount { cloud.prefs.hiddenExerciseStats(cloud.uid()) }
+    suspend fun restoreExerciseStats(name: String) = cloud.withAccount { cloud.prefs.setExerciseStatsHidden(cloud.uid(), name, false) }
 
     /** Most recent prior performance of an exercise, ordered by set index. */
     suspend fun previousSets(exercise: String): List<SetEntity> = cloud.withAccount {
@@ -115,9 +118,9 @@ class StrengthRepository @Inject constructor(
         StrengthStats.compute(exercise, dao.setsHistoryForExercise(exercise))
 
     // --- mapping helpers ---------------------------------------------------
-    private fun DatedSet.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, startedAt)
-    private fun SetEntity.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, 0)
-    private fun SetWithDate.toLog() = LogSet(weightKg, reps, null, isWarmup, "", startedAt)
+    private fun DatedSet.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, startedAt, quantityUnit)
+    private fun SetEntity.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, 0, quantityUnit)
+    private fun SetWithDate.toLog() = LogSet(weightKg, reps, null, isWarmup, "", startedAt, quantityUnit)
 
     // --- B2 + B5: weekly volume / balance / deload -------------------------
     suspend fun weeklyReport(): WeeklyReport = cloud.withAccount {
@@ -137,8 +140,13 @@ class StrengthRepository @Inject constructor(
     suspend fun progressionFor(exercise: String): ProgressionSuggestion? = cloud.withAccount {
         // Cardio is logged in minutes, not load — no strength progression target.
         if (ExerciseCatalog.isCardio(exercise)) return@withAccount null
-        val last = previousSets(exercise).map { it.toLog() }
+        val previous = previousSets(exercise)
+        if (previous.any { it.quantityUnit != "reps" }) return@withAccount null
+        val last = previous.map { it.toLog() }
         if (last.isEmpty()) return@withAccount null
+        // Band resistance is not a comparable kilogram load. Keep manual band
+        // setup/effort notes; do not invent a plate increment.
+        if (ExerciseCatalog.find(exercise)?.category == "Band" || exercise.contains("assisted", ignoreCase = true)) return@withAccount null
         val compound = ExerciseCatalog.find(exercise)?.compound ?: false
         val (lo, hi) = if (compound) 5 to 8 else 8 to 12
         return@withAccount Progression.suggest(last, ProgressionRule.DOUBLE, lo, hi, compound)
@@ -175,14 +183,16 @@ class StrengthRepository @Inject constructor(
             dao.deleteTombstone("custom", e.name)
             dao.insertCustomExercise(e)
         }
+        cloud.prefs.setExerciseStatsHidden(cloud.uid(), name.trim(), false)
         loadAndRegisterCustom()
     }
 
-    suspend fun deleteCustomExercise(name: String) = cloud.withAccount {
+    suspend fun deleteCustomExercise(name: String, hideFromStats: Boolean = false) = cloud.withAccount {
         db.withTransaction {
             dao.deleteCustomExercise(name)
             dao.insertTombstone(TombstoneEntity("custom", name))
         }
+        if (hideFromStats && ExerciseCatalog.all.none { it.name == name }) cloud.prefs.setExerciseStatsHidden(cloud.uid(), name, true)
         loadAndRegisterCustom()
     }
 
@@ -253,8 +263,8 @@ class StrengthRepository @Inject constructor(
             for (ex in w.exercises) {
                 val muscle = ExerciseCatalog.muscleOf(ex.name)
                 ex.sets.forEachIndexed { i, s ->
-                    if (!s.isWarmup) totalVolume += s.weightKg * s.reps
-                    setEntities.add(SetEntity(UUID.randomUUID().toString(), workoutId, ex.name, muscle, i + 1, s.weightKg, s.reps, s.rpe, s.isWarmup, s.note))
+                    if (!s.isWarmup && s.quantityUnit == "reps" && ExerciseMetadataCatalog.byName[ex.name]?.loadMode !in listOf("band", "assistance")) totalVolume += s.weightKg * s.reps
+                    setEntities.add(SetEntity(UUID.randomUUID().toString(), workoutId, ex.name, muscle, i + 1, s.weightKg, s.reps, s.rpe, s.isWarmup, s.note, s.quantityUnit))
                 }
             }
             val we = WorkoutEntity(workoutId, w.name, w.startedAt, w.startedAt, 0, totalVolume, "Imported", synced = false)
@@ -294,7 +304,7 @@ class StrengthRepository @Inject constructor(
     // be re-imported here or anywhere else. Semicolon-delimited, matching Strong.
     suspend fun exportCsv(): String = cloud.withAccount {
         val sb = StringBuilder()
-        sb.append("Date;Workout Name;Exercise Name;Set Order;Weight;Weight Unit;Reps;RPE;Notes\n")
+        sb.append("Date;Workout Name;Exercise Name;Set Order;Weight;Weight Unit;Reps;RPE;Notes;Quantity Unit\n")
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         val zone = ZoneId.systemDefault()
         fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
@@ -304,7 +314,7 @@ class StrengthRepository @Inject constructor(
             for (s in sets) {
                 val weight = if (s.weightKg == s.weightKg.toLong().toDouble()) s.weightKg.toLong().toString()
                     else s.weightKg.toString()
-                sb.append("$date;${q(w.name)};${q(s.exerciseName)};${s.idx};$weight;kg;${s.reps};${s.rpe ?: ""};${q(s.note)}\n")
+                sb.append("$date;${q(w.name)};${q(s.exerciseName)};${s.idx};$weight;kg;${s.reps};${s.rpe ?: ""};${q(s.note)};${s.quantityUnit}\n")
             }
         }
         return@withAccount sb.toString()
@@ -435,6 +445,7 @@ class StrengthRepository @Inject constructor(
         // Q2: when re-saving an edited workout, reuse its id (and delete the old
         // sets first) so the entry is updated in place rather than duplicated.
         existingId: String? = null,
+        plannedWorkoutId: String? = null,
     ): FinishResult = cloud.withAccount { db.withTransaction {
         // Transactional so an edit's delete-old + insert-new is atomic — a crash
         // between them would otherwise lose the workout entirely.
@@ -450,7 +461,8 @@ class StrengthRepository @Inject constructor(
         val priorBestWorkoutVolume = dao.bestWorkoutVolume() ?: 0.0
         val prHits = mutableListOf<PrHit>()
         for (ex in exercises) {
-            val session = ex.sets.map { LogSet(it.weightKg, it.reps, it.rpe, it.isWarmup) }
+            if (ExerciseMetadataCatalog.byName[ex.name]?.loadMode in listOf("band", "assistance")) continue
+            val session = ex.sets.filter { it.quantityUnit == "reps" }.map { LogSet(it.weightKg, it.reps, it.rpe, it.isWarmup) }
             val working = session.filter { !it.isWarmup && it.reps > 0 }
             if (working.isEmpty()) continue
             val prior = Prs.record(dao.setsHistoryForExercise(ex.name).map { it.toLog() })
@@ -469,7 +481,7 @@ class StrengthRepository @Inject constructor(
         for (ex in exercises) {
             val muscle = ExerciseCatalog.muscleOf(ex.name)
             ex.sets.forEachIndexed { i, s ->
-                if (!s.isWarmup) totalVolume += s.weightKg * s.reps
+                if (!s.isWarmup && s.quantityUnit == "reps" && ExerciseMetadataCatalog.byName[ex.name]?.loadMode !in listOf("band", "assistance")) totalVolume += s.weightKg * s.reps
                 setEntities.add(
                     SetEntity(
                         id = UUID.randomUUID().toString(),
@@ -482,6 +494,7 @@ class StrengthRepository @Inject constructor(
                         rpe = s.rpe,
                         isWarmup = s.isWarmup,
                         note = s.note,
+                        quantityUnit = s.quantityUnit,
                     ),
                 )
             }
@@ -502,6 +515,7 @@ class StrengthRepository @Inject constructor(
             totalVolumeKg = totalVolume,
             note = note,
             synced = false, // pushed to the cloud by the next sync pass (works offline)
+            plannedWorkoutId = plannedWorkoutId,
         )
         dao.insertWorkout(workoutEntity)
         if (setEntities.isNotEmpty()) dao.insertSets(setEntities)
@@ -573,9 +587,9 @@ private data class StrengthUpload(
         return buildJsonObject {
             put("p_owner", owner); put("p_zone", zone)
             put("p_workouts", JsonArray(workouts.map { (w, sets) ->
-                JsonObject(json.encodeToJsonElement(CloudWorkout(w.id,w.name,w.startedAt,w.endedAt,w.durationSec,w.totalVolumeKg,w.note)).jsonObject +
+                JsonObject(json.encodeToJsonElement(CloudWorkout(w.id,w.name,w.startedAt,w.endedAt,w.durationSec,w.totalVolumeKg,w.note,w.plannedWorkoutId)).jsonObject +
                     ("sets" to json.encodeToJsonElement(sets.map {
-                        CloudSet(it.id,it.workoutId,it.exerciseName,it.muscle,it.idx,it.weightKg,it.reps,it.rpe,it.isWarmup,it.note)
+                        CloudSet(it.id,it.workoutId,it.exerciseName,it.muscle,it.idx,it.weightKg,it.reps,it.rpe,it.isWarmup,it.note,it.quantityUnit)
                     })))
             }))
             put("p_routines", JsonArray(routines.map { r ->

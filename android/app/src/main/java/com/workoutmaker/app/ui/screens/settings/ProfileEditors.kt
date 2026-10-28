@@ -630,7 +630,7 @@ internal fun PerformanceEditor(
         if (profile.sports.contains("strength")) {
             PerfSection("Strength") {
                 Text(
-                    "Your current top set per lift. First workouts start from these instead of conservative guesses.",
+                    "Your current top set per lift. Workouts use these together with your logged sets to choose exercises, weights and reps.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 listOf("Back Squat", "Barbell Bench Press", "Deadlift").forEach { lift ->

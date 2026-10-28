@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.calendar
 
+import com.workoutmaker.app.ui.components.AdaptationControls
+import com.workoutmaker.app.ui.components.SessionFeedbackPanel
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,9 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.EventAvailable
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
@@ -27,7 +27,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -72,7 +71,6 @@ import com.workoutmaker.app.ui.screens.history.StrengthSessionDetailScreen
 import com.workoutmaker.app.ui.screens.home.WorkoutDetail
 import com.workoutmaker.app.data.planWeek
 import com.workoutmaker.app.data.requestSession
-import com.workoutmaker.app.data.templates
 import com.workoutmaker.app.data.undoSkip
 import com.workoutmaker.app.data.weekPlan
 
@@ -98,14 +96,12 @@ internal fun typeColor(type: String) = when {
 @Composable
 fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -> Unit = {}) {
     val workouts by vm.workouts.collectAsStateSafe()
-    val templates by vm.templates.collectAsStateSafe()
     val banner by vm.banner.collectAsStateSafe()
     val loading by vm.loading.collectAsStateSafe()
     val planning by vm.planning.collectAsStateSafe()
     val weekPlan by vm.weekPlan.collectAsStateSafe()
     val strengthByDate by vm.strengthByDate.collectAsStateSafe()
     val activitiesByDate by vm.activitiesByDate.collectAsStateSafe()
-    val adapting by vm.adapting.collectAsStateSafe()
     val pendingSync by vm.pendingSync.collectAsStateSafe()
 
     // Transient sync/mark/skip confirmations go to the app-wide snackbar; the
@@ -121,7 +117,6 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
 
     var visibleMonth by remember { mutableStateOf(YearMonth.now()) }
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
-    var scheduleFor by remember { mutableStateOf<LocalDate?>(null) }
     var showLog by remember { mutableStateOf(false) }
     var showBuilder by remember { mutableStateOf(false) }
     var showRequest by remember { mutableStateOf(false) }
@@ -172,6 +167,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
             strength = strengthByDate[d.toString()].orEmpty(),
             activities = activitiesByDate[d.toString()].orEmpty(),
             onDismiss = { peekDate = null },
+            onMarkUndone = { vm.markUndone(it); peekDate = null },
         )
     }
 
@@ -180,7 +176,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
         DetailOverlay {
             ActivityDetailScreen(
                 activity = act,
-                planned = byDate[act.date]?.firstOrNull(),
+                planned = byDate[act.date]?.firstOrNull { it.id == act.planned_workout_id },
                 onBack = { activityDetail = null },
             )
         }
@@ -194,7 +190,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
         val zone = ZoneId.systemDefault()
         val day = Instant.ofEpochMilli(sw.startedAt).atZone(zone).toLocalDate().toString()
         val watch = vm.activitiesByDate.value[day]?.firstOrNull { a ->
-            looksLike("strength", a.type)
+            overlapsStrength(sw.startedAt, sw.endedAt, a)
         }
         DetailOverlay {
             StrengthSessionDetailScreen(
@@ -226,12 +222,6 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
             IconButton(onClick = { vm.syncNow() }, enabled = !loading) {
                 Icon(Icons.Filled.Sync, contentDescription = "Sync activities from Intervals.icu")
             }
-            IconButton(onClick = { vm.planWeek(weekStart) }, enabled = !planning) {
-                Icon(Icons.Filled.AutoAwesome, contentDescription = "Plan my week")
-            }
-            IconButton(onClick = { scheduleFor = selectedDate }) {
-                Icon(Icons.Filled.Add, contentDescription = "Schedule a template")
-            }
         },
     ) { mod ->
         Column(mod, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -244,24 +234,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
                 )
             }
 
-            // Adaptive re-plan prompt — surfaces when the week diverged from plan.
-            if (divergence) {
-                SectionCard {
-                    SectionLabel("Plan vs reality", color = MaterialTheme.colorScheme.secondary)
-                    Text(
-                        "You've got planned sessions this week you haven't done yet. I can check what you actually did on Intervals.icu and rebuild the rest of your week around it.",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    GhostButton(
-                        onClick = { vm.adapt(realWeekStart) },
-                        enabled = !adapting && !planning,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Icons.Filled.AutoAwesome, null, modifier = Modifier.size(18.dp))
-                        Text(if (adapting) "  Adapting…" else "  Adapt my plan to what I did")
-                    }
-                }
-            }
+            AdaptationControls()
 
             WeekSummaryCard(
                 weekStart, workouts, planning, weekPlan,
@@ -343,14 +316,19 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
             // strength session is the SAME workout — fold the watch data into the
             // strength card instead of showing two entries.
             val pairedWatch = remember(dayActivities, dayStrength) {
-                val pool = dayActivities.filter { looksLike("strength", it.type) }.toMutableList()
-                dayStrength.associate { sw -> sw.id to (if (pool.isNotEmpty()) pool.removeAt(0) else null) }
+                val pool = dayActivities.toMutableList()
+                dayStrength.associate { sw ->
+                    val match = pool.filter { overlapsStrength(sw.startedAt, sw.endedAt, it) }
+                        .minByOrNull { activity -> kotlin.math.abs((runCatching { activity.started_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull() ?: sw.startedAt) - sw.startedAt) }
+                    if (match != null) pool.remove(match)
+                    sw.id to match
+                }
             }
             val mergedIds = pairedWatch.values.filterNotNull().map { it.id }.toSet()
 
             // Remaining completed Intervals.icu activities on this day — tap for detail.
             dayActivities.filter { it.id !in mergedIds }.forEach { act ->
-                ActivityCard(act, planned = daySessions.firstOrNull()) { activityDetail = act }
+                ActivityCard(act, planned = daySessions.firstOrNull { it.id == act.planned_workout_id }) { activityDetail = act }
             }
 
             // Q14: strength sessions logged on this day (now unified with their
@@ -379,7 +357,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
             if (daySessions.isEmpty() && dayStrength.isEmpty() && dayActivities.isEmpty()) {
                 EmptyState(
                     title = "Nothing planned",
-                    subtitle = "Tap ＋ to schedule a template on this day.",
+                    subtitle = "Ask your coach for a personalized session for this day.",
                     icon = Icons.Filled.EventAvailable,
                 )
             } else if (daySessions.isNotEmpty()) {
@@ -404,7 +382,8 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
                                 Icon(Icons.Filled.Delete, "Delete workout", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        WorkoutDetail(w.workout_json)
+                        WorkoutDetail(w.workout_json, calProfile)
+                        SessionFeedbackPanel(date=w.date,planId=w.id)
                         if (w.type == "rest") {
                             // A rest day needs no action — show it as already
                             // handled so the day reads as "done" at a glance.
@@ -419,7 +398,7 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
                             } else if (w.skipped) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        "Skipped, the plan will adapt.",
+                                        "Skipped. Preview an adjustment when you want one.",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -519,31 +498,14 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
         ) { DatePicker(state = state) }
     }
 
-    scheduleFor?.let { day ->
-        AlertDialog(
-            onDismissRequest = { scheduleFor = null },
-            confirmButton = { TextButton(onClick = { scheduleFor = null }) { Text("Close") } },
-            title = { Text("Schedule on $day") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (templates.isEmpty()) {
-                        EmptyState(
-                            title = "No templates yet",
-                            subtitle = "Design one with your coach in the Coach tab, then schedule it here.",
-                            icon = Icons.Filled.AutoAwesome,
-                        )
-                    }
-                    templates.forEach { t ->
-                        SectionCard(title = t.name) {
-                            t.description?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                            OutlinedButton(
-                                onClick = { vm.schedule(t, day); scheduleFor = null },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Schedule from $day") }
-                        }
-                    }
-                }
-            },
-        )
-    }
+
+}
+
+private fun overlapsStrength(startedAt: Long, endedAt: Long, activity: CompletedActivity): Boolean {
+    if (!looksLike("strength", activity.type)) return false
+    val start = runCatching { activity.started_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull() ?: return false
+    val end = runCatching { activity.ended_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull()
+        ?: (start + (activity.duration_seconds ?: 0) * 1000L)
+    val slack = 30 * 60 * 1000L
+    return start < endedAt + slack && startedAt < end + slack
 }

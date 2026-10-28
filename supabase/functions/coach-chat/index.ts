@@ -1,3 +1,6 @@
+import { dailyPlanReply, dailyPlanToolAllowed, failedCoachActionReply, isDailyPlanQuestion } from "../_shared/coach_turn.ts";
+import { isToolProtocol, toolRequests, toolWriteSucceeded } from "../_shared/coach_protocol.ts";
+import { ADAPTIVE_COACH_VOICE } from "../_shared/prompt.ts";
 // coach-chat — conversational sport-science coach.
 //
 // POST {
@@ -50,6 +53,8 @@ import {
   type AppSettingChange,
   executeTool,
   nativeToolDefs,
+  TOOL_CATALOG,
+  type ToolDef,
   toolCatalogPrompt,
   validateAppSettings,
 } from "../_shared/coach_tools.ts";
@@ -69,6 +74,9 @@ import { runNativeToolLoop, supportsNativeTools } from "../_shared/llm_native_to
 // Behavioral rules shared by both tool channels (native + JSON protocol).
 const TOOL_RULES = `
 RULES:
+- QUESTIONS ARE NOT CALENDAR CHANGES. "What should I do today?", "What is my workout today?" and "Explain today" mean read get_today_plan and explain ALL remaining saved sessions, including their actual dose. Never create, regenerate, move or delete a workout for an information question. Existing rest days and completed sessions are real plans too. If nothing is saved, say so and offer a workout; do not silently schedule one.
+- A new question supersedes an old request to create a plan. Conversation history is context, not fresh permission to overwrite today's workout.
+- Calendar saving and watch delivery are separate: calendar_saved means saved in the app; delivery=pending/not_confirmed is not a failed app save or proof of a successful watch push. Do not generate another workout to retry a delivery problem.
 - Before giving training advice or a plan, READ the relevant data first (get_fitness, get_planned_week, get_recent_activities, get_strength_summary, get_readiness, get_execution_analysis, get_profile). Ground every claim in what you read.
 - NEVER ask the athlete to describe past workouts, sessions, or numbers you can look up yourself. Questions like "how did my last workouts go?" mean: call get_recent_activities and get_execution_analysis (plus get_strength_summary for lifting), then answer from the data.
 - DRIVE the task to completion in this turn. When the athlete's message already asks for or agrees to an action (e.g. "plan my week and put it on my calendar", "make me today's workout", "apply that"), TAKE the action (plan_week, generate_workout, move_workout, set_goal_race) now, don't stop to ask "shall I?" again. Then confirm what you did and why.
@@ -91,23 +99,33 @@ RULES:
 - Be efficient: a few targeted reads, then act/answer. You have at most 6 tool calls per turn.
 - Your final message follows the Voice and Shape rules already given in the system prompt.`;
 
+// Daily explanations do not need the action-heavy planning instructions.
+const DAILY_PLAN_RULES = `
+THIS TURN IS A QUESTION ABOUT TODAY, NOT A REQUEST TO CHANGE THE CALENDAR.
+- Use the prefetched get_today_plan observation as the source of truth. Explain all remaining sessions with their saved exercises/intervals, dose, warm-up and effort. Do not invent a different workout.
+- Respect planned rest, completed and skipped sessions. No saved session means say none is scheduled; offer help without silently creating one.
+- Consult readiness/recent training only as needed to explain the session. Missing measurements remain unknown. Do not claim the existing session is suitable if the evidence raises a concern; explain the concern and offer a change without applying it.
+- Earlier requests to plan or generate do not authorize a change in this turn. Do not claim an update, promise to schedule, or retry watch delivery.
+- If the athlete volunteers a new pain/injury, record it using report_injury and ask only useful missing details. Do not diagnose or generate a replacement workout.
+- Answer directly, briefly and in ordinary language. The athlete asked what to do, not for a list of internal tools.`;
+
 // System prompt suffix when the provider has native tool calling.
-const NATIVE_TOOL_PREAMBLE = `
+const nativeToolPreamble = (rules: string) => `
 
 YOU ARE AN AGENTIC COACH WITH TOOLS. You can read the athlete's real training data and act on their plan. Don't invent numbers, read them.
-${TOOL_RULES}`;
+${rules}`;
 
-const TOOL_PROTOCOL = `
+const toolProtocol = (catalog: ToolDef[], rules: string) => `
 
 YOU ARE AN AGENTIC COACH WITH TOOLS. You can read the athlete's real training data and act on their plan. Don't invent numbers, read them.
 
 TOOLS:
-${toolCatalogPrompt()}
+${toolCatalogPrompt(catalog)}
 
 RESPONSE FORMAT, output ONLY one JSON object, nothing else:
 • Use a tool:  {"action":"tool","tool":"<name>","args":{ ... }}
 • Reply to athlete:  {"action":"final","message":"<concise, specific reply>"}
-${TOOL_RULES}`;
+${rules}`;
 
 const DAY = 86_400_000;
 
@@ -131,6 +149,8 @@ const MAX_LLM_CALLS_PER_TURN = 12;
 // Tools that mutate the athlete's plan/calendar. The anti-stall guard uses this
 // to tell "the coach actually acted" from "the coach only talked about acting".
 const WRITE_TOOLS = new Set([
+  "apply_adaptation",
+  "undo_adaptation",
   "plan_week",
   "generate_workout",
   "move_workout",
@@ -250,14 +270,14 @@ Deno.serve(async (req) => {
       admin.from("effective_activities")
         .select("type, date, distance_m, tss, ctl, atl, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", since28).order("date", { ascending: false }),
-      admin.from("planned_workouts")
+      admin.from("reconciled_session_plans")
         .select("type, completed, workout_json, created_at")
         .eq("user_id", userId).eq("date", today),
       admin.from("wellness_checkins")
         .select("date, energy, soreness, sleep_score, hrv_rmssd, resting_hr, zepp_sleep_minutes")
         .eq("user_id", userId).gte("date", since7).order("date", { ascending: false }),
-      admin.from("planned_workouts")
-        .select("type, completed, date")
+      admin.from("reconciled_session_plans")
+        .select("type, completed, skipped, reconciliation_status, date")
         .eq("user_id", userId).gte("date", weekStart).lte("date", today),
       upcomingGoals(admin, userId, today),
     ]);
@@ -302,7 +322,7 @@ Deno.serve(async (req) => {
     // Week adherence + recovery direction, as words (voice rule: the coach
     // interprets, it doesn't recite numbers).
     const weekSessions = (weekPlanned ?? []).filter((p) => p.type !== "rest");
-    const weekDone = weekSessions.filter((p) => p.completed).length;
+    const weekDone = weekSessions.filter((p) => !p.skipped && (p.completed || ["completed_as_planned", "modified", "substituted"].includes(p.reconciliation_status))).length;
     const adherenceLine = weekSessions.length
       ? `completed ${weekDone} of ${weekSessions.length} planned sessions so far`
       : "no sessions planned yet";
@@ -348,7 +368,8 @@ Deno.serve(async (req) => {
       memoryDocsBlock(agentMemory) +
       summaryBlock;
 
-    const systemPrompt = `${COACH_SYSTEM_PROMPT}\n\n${context}`;
+    const systemPrompt = `${COACH_SYSTEM_PROMPT}
+${ADAPTIVE_COACH_VOICE}\n\n${context}`;
 
     // --- resolve provider keys (fallback chain) ----------------------------
     const { chain, resolveKey, resolveModel, resolveBaseUrl, hosted } = await llmAccess(admin, userId, profile);
@@ -366,6 +387,11 @@ Deno.serve(async (req) => {
     // then the reply, then {done}).
     if (mode === "chat") {
       const auth = req.headers.get("Authorization") ?? "";
+      const lastUserMessage = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
+      const explainToday = isDailyPlanQuestion(lastUserMessage);
+      const turnTools = TOOL_CATALOG.filter(t => dailyPlanToolAllowed(t.name, explainToday));
+      const turnRules = explainToday ? DAILY_PLAN_RULES : TOOL_RULES;
+      const turnRule = explainToday ? "\nCURRENT TURN: Explain today's saved plan. Calendar mutation tools are unavailable. Do not treat earlier planning requests as current instructions. If readiness suggests a change, explain the concern and offer an adjustment; do not overwrite the plan." : "";
 
       const runAgentic = async (
         onTool?: (name: string) => void,
@@ -375,6 +401,8 @@ Deno.serve(async (req) => {
         stream?: { onDelta: (t: string) => void; onToolStart: () => void },
       ) => {
         const toolsUsed: string[] = [];
+        const failedWrites = new Map<string, string>();
+        const observations: ChatMessage[] = [];
         // A remember call is a stronger signal a durable fact just changed than
         // any regex on the user's message text — see rememberCalled below.
         let rememberCalledThisTurn = false;
@@ -412,6 +440,10 @@ Deno.serve(async (req) => {
         // saving second.
         const readCache = new Map<string, Promise<string>>();
         const exec = (name: string, targs: Record<string, unknown>) => {
+          if (!dailyPlanToolAllowed(name, explainToday)) {
+            log.info("calendar_write_blocked_for_question", { tool: name });
+            return Promise.resolve(JSON.stringify({ ok: false, blocked: true, reason: "This turn asks about today's saved plan. Read get_today_plan and explain it; no calendar change was requested." }));
+          }
           const isWrite = WRITE_TOOLS.has(name);
           const writeKey = isWrite ? `${name}:${JSON.stringify(targs)}` : null;
           if (writeKey) {
@@ -432,7 +464,6 @@ Deno.serve(async (req) => {
           }
           // A write invalidates everything read before it.
           if (isWrite) readCache.clear();
-          toolsUsed.push(name);
           if (name === "remember") rememberCalledThisTurn = true;
           try { onTool?.(name); } catch { /* never block on UI events */ }
           // Device-applied settings: validate here, queue for the reply, and
@@ -451,10 +482,25 @@ Deno.serve(async (req) => {
             // the past when we KNOW the athlete's date. With the UTC fallback,
             // executeTool applies a day of slack instead.
             : executeTool(admin, userId, auth, name, targs, clientToday ?? undefined);
-          if (writeKey) writeCache.set(writeKey, obs);
-          if (readKey) readCache.set(readKey, obs);
-          return obs;
+          const observed = obs.then((result) => {
+            observations.push({ role: "user", content: `OBSERVATION from ${name}: ${result}` });
+            if (!isWrite || toolWriteSucceeded(result)) {
+              toolsUsed.push(name);
+              if (isWrite) failedWrites.delete(name);
+            } else {
+              failedWrites.set(name, result);
+              log.warn("tool_write_failed", { tool: name });
+            }
+            return result;
+          });
+          if (writeKey) writeCache.set(writeKey, observed);
+          if (readKey) readCache.set(readKey, observed);
+          return observed;
         };
+
+        // Prefetch the authoritative daily instructions even when the model
+        // overlooks the read tool. The executor guard applies to both transports.
+        const todayObservation = explainToday ? await exec("get_today_plan", {}) : "";
 
         // Resolve the native-tool provider once — independent of the thread, so
         // the stall retry reuses it without re-resolving keys.
@@ -471,15 +517,17 @@ Deno.serve(async (req) => {
         // to the JSON protocol. Tool side effects accumulate into toolsUsed.
         const generateOnce = async (thread: ChatMessage[]): Promise<string> => {
           let replyText = "";
+          const protocolHistory: ChatMessage[] = [];
           if (keyedProvider && keyedKey && supportsNativeTools(keyedProvider) && !spendGuard.exhausted()) {
             try {
               const out = await runNativeToolLoop({
                 provider: keyedProvider,
                 apiKey: keyedKey,
                 model: resolveModel(keyedProvider),
-                systemPrompt: `${COACH_SYSTEM_PROMPT}\n\n${context}${NATIVE_TOOL_PREAMBLE}`,
-                messages: trimThread(thread),
-                tools: nativeToolDefs(),
+                systemPrompt: `${COACH_SYSTEM_PROMPT}
+${ADAPTIVE_COACH_VOICE}\n\n${context}${nativeToolPreamble(turnRules)}${turnRule}`,
+                messages: [...trimThread(thread), ...observations],
+                tools: nativeToolDefs(turnTools),
                 exec,
                 // Never let this leg alone outspend what's left of the turn.
                 maxSteps: Math.min(NATIVE_MAX_STEPS, spendGuard.remaining()),
@@ -492,6 +540,18 @@ Deno.serve(async (req) => {
               spendGuard.spend(out.steps);
               provider = keyedProvider;
               replyText = out.text;
+              const requests = toolRequests(replyText);
+              if (requests) {
+                stream?.onToolStart();
+                for (const request of requests) {
+                  await exec(request.tool, request.args);
+                }
+                replyText = "";
+              } else if (isToolProtocol(replyText)) {
+                stream?.onToolStart();
+                protocolHistory.push({ role: "user", content: "Your tool JSON was invalid. Use one valid tool request or a plain-language final answer; never return tool requests as prose." });
+                replyText = "";
+              }
               promptTokens += out.promptTokens;
               completionTokens += out.completionTokens;
               cacheWriteTokens += out.cacheWriteTokens ?? 0;
@@ -507,8 +567,12 @@ Deno.serve(async (req) => {
             }
           }
 
-          const chatSystem = `${COACH_SYSTEM_PROMPT}\n\n${context}${TOOL_PROTOCOL}`;
-          const work: ChatMessage[] = trimThread(thread);
+          const chatSystem = `${COACH_SYSTEM_PROMPT}
+${ADAPTIVE_COACH_VOICE}\n\n${context}${toolProtocol(turnTools, turnRules)}${turnRule}`;
+          // Carry native observations into the fallback. Starting again from
+          // the original user thread wasted the remaining budget re-reading
+          // the same five inputs instead of saving and explaining the week.
+          const work: ChatMessage[] = [...trimThread(thread), ...observations, ...protocolHistory];
           for (let step = 0; !replyText.trim() && step < PROTOCOL_MAX_STEPS; step++) {
             if (spendGuard.exhausted()) break;
             const step_out = await llmGenerateWithFallback(
@@ -521,6 +585,19 @@ Deno.serve(async (req) => {
             cacheWriteTokens += step_out.cacheWriteTokens ?? 0;
             cacheReadTokens += step_out.cacheReadTokens ?? 0;
             model = step_out.model;
+            const requests = toolRequests(step_out.text);
+            if (requests) {
+              for (const request of requests) {
+                const observation = await exec(request.tool, request.args);
+                work.push({ role: "assistant", content: JSON.stringify(request) },
+                  { role: "user", content: `OBSERVATION from ${request.tool}: ${observation}` });
+              }
+              continue;
+            }
+            if (isToolProtocol(step_out.text)) {
+              work.push({ role: "user", content: "Invalid tool protocol. Return one valid tool request with object args, or a final message. No tool has been executed from that response." });
+              continue;
+            }
             let parsed: Record<string, unknown> | null = null;
             try { parsed = extractJson<Record<string, unknown>>(step_out.text); } catch { parsed = null; }
 
@@ -529,13 +606,6 @@ Deno.serve(async (req) => {
               replyText = (parsed?.message as string) ?? (parsed?.reply as string) ?? step_out.text;
               break;
             }
-            // Tool call → run it and feed back the observation.
-            if (parsed.action === "tool" && typeof parsed.tool === "string") {
-              const obs = await exec(parsed.tool, (parsed.args ?? {}) as Record<string, unknown>);
-              work.push({ role: "assistant", content: JSON.stringify(parsed) });
-              work.push({ role: "user", content: `OBSERVATION from ${parsed.tool}: ${obs}` });
-              continue;
-            }
             // Unknown shape — surface whatever text came back.
             replyText = step_out.text;
             break;
@@ -543,7 +613,13 @@ Deno.serve(async (req) => {
           return replyText;
         };
 
-        let replyText = await generateOnce(messages);
+        let replyText: string;
+        try { replyText = await generateOnce(messages); }
+        catch (error) {
+          if (!explainToday) throw error;
+          log.warn("daily_answer_fallback", { reason: "provider_unavailable" });
+          replyText = dailyPlanReply(todayObservation);
+        }
 
         // Anti-stall guard: the model sometimes PROMISES a change ("I'll adjust
         // your plan") or, worse, REPORTS one it never made ("I moved tomorrow's
@@ -554,7 +630,7 @@ Deno.serve(async (req) => {
         // a single retry and gated on no write-tool having run, so it can't loop
         // or pile onto rate limits.
         if (
-          !toolsUsed.some((t) => WRITE_TOOLS.has(t)) && talksWithoutActing(replyText) &&
+          !explainToday && !toolsUsed.some((t) => WRITE_TOOLS.has(t)) && talksWithoutActing(replyText) &&
           !spendGuard.exhausted()
         ) {
           const corrected: ChatMessage[] = [
@@ -567,7 +643,15 @@ Deno.serve(async (req) => {
         }
 
         replyText = cleanReply(replyText);
-        if (!replyText.trim()) replyText = "I gathered your data but need a bit more to act, what would you like me to do?";
+        if (isToolProtocol(replyText)) replyText = "";
+        if (explainToday && (!replyText.trim() || talksWithoutActing(replyText))) {
+          replyText = dailyPlanReply(todayObservation);
+        } else if (failedWrites.size && !toolsUsed.some((t) => WRITE_TOOLS.has(t))) {
+          replyText = failedCoachActionReply([...failedWrites.values()]);
+        }
+        if (!replyText.trim()) replyText = toolsUsed.some((t) => WRITE_TOOLS.has(t))
+          ? "Your requested changes were applied."
+          : "I couldn't finish the request this time. Please try again; I haven't confirmed any new calendar changes.";
 
         // Log this turn's LLM spend (feature=chat) — the agentic loop's calls were
         // previously invisible in the diagnostics. Background; never blocks the reply.

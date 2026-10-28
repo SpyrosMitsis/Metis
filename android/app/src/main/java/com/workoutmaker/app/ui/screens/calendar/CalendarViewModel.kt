@@ -8,9 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.workoutmaker.app.data.PlannedWorkout
-import com.workoutmaker.app.data.ScheduleRequest
 import com.workoutmaker.app.data.WorkoutRepository
-import com.workoutmaker.app.data.WorkoutTemplate
 import com.workoutmaker.app.data.CompletedActivity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +29,6 @@ import com.workoutmaker.app.strength.StrengthRepository
 import com.workoutmaker.app.strength.WorkoutEntity
 import java.time.Instant
 import java.time.ZoneId
-import com.workoutmaker.app.data.adaptWeek
 import com.workoutmaker.app.data.cachedPlannedWorkouts
 import com.workoutmaker.app.data.completedActivities
 import com.workoutmaker.app.data.deletePlannedWorkout
@@ -45,11 +42,9 @@ import com.workoutmaker.app.data.pushWorkout
 import com.workoutmaker.app.data.requestSession
 import com.workoutmaker.app.data.reschedulePlanned
 import com.workoutmaker.app.data.savePlannedWorkout
-import com.workoutmaker.app.data.scheduleTemplate
 import com.workoutmaker.app.data.setLocked
 import com.workoutmaker.app.data.syncHealth
 import com.workoutmaker.app.data.syncIntervals
-import com.workoutmaker.app.data.templates
 import com.workoutmaker.app.data.undoSkip
 import com.workoutmaker.app.data.weekPlan
 
@@ -85,7 +80,6 @@ class CalendarViewModel @Inject constructor(
     val workouts = MutableStateFlow<List<PlannedWorkout>>(emptyList())
     // For the phase strip on the week card (goal_date drives the phase bands).
     val profile = MutableStateFlow<TrainingProfile?>(null)
-    val templates = MutableStateFlow<List<WorkoutTemplate>>(emptyList())
     val banner = MutableStateFlow<String?>(null)
     val loading = MutableStateFlow(false)
     val planning = MutableStateFlow(false)
@@ -94,7 +88,6 @@ class CalendarViewModel @Inject constructor(
     val strengthByDate = MutableStateFlow<Map<String, List<WorkoutEntity>>>(emptyMap())
     // Past activities from Intervals.icu, grouped by date for the calendar + detail.
     val activitiesByDate = MutableStateFlow<Map<String, List<CompletedActivity>>>(emptyMap())
-    val adapting = MutableStateFlow(false)
     // Count of local strength changes (logged/edited/deleted offline) not yet
     // pushed to the cloud — surfaced as a banner so nothing looks lost.
     val pendingSync = MutableStateFlow(0)
@@ -126,7 +119,6 @@ class CalendarViewModel @Inject constructor(
                     banner.value = "Offline, showing your last synced plan."
                 }
             }
-        runCatching { repo.templates() }.onSuccess { templates.value = it }
         runCatching { repo.completedActivities(from) }
             .onSuccess { acts -> activitiesByDate.value = acts.filter { it.date != null }.groupBy { it.date!! } }
         runCatching {
@@ -158,23 +150,6 @@ class CalendarViewModel @Inject constructor(
         loading.value = false
     }
 
-    // Adaptive re-plan: reconcile this week with what was actually done on
-    // Intervals.icu, then re-plan the rest of the week around it.
-    fun adapt(weekStart: LocalDate) = viewModelScope.launch {
-        adapting.value = true
-        banner.value = "Syncing your activities, then adapting your plan to what you did…"
-        runCatching { repo.syncIntervals() } // best-effort: work from the freshest actuals
-        runCatching { repo.syncHealth() }    // watch workouts too (fallback source)
-        runCatching { repo.adaptWeek(weekStart.toString(), LocalDate.now().toString()) }
-            .onSuccess { r ->
-                banner.value = r.error?.let { "Couldn't fully adapt: $it" } ?: "✓ ${r.message}"
-                load()
-                loadWeekPlan(weekStart)
-            }
-            .onFailure { banner.value = "Couldn't adapt: ${it.message}" }
-        adapting.value = false
-    }
-
     fun markComplete(plannedId: String, date: LocalDate, completed: Boolean) = viewModelScope.launch {
         runCatching { repo.markPlannedComplete(plannedId, date.toString(), completed, if (completed) "just_right" else null, null) }
             .onSuccess { banner.value = if (completed) "✓ Marked done" else "Marked skipped"; load() }
@@ -190,7 +165,7 @@ class CalendarViewModel @Inject constructor(
     // Undo a completion (in case of a mistake) — flips the flag without logging
     // feedback.
     fun markUndone(plannedId: String) = viewModelScope.launch {
-        runCatching { strength.markPlannedWorkoutDone(plannedId, false) }
+        runCatching { repo.undoSkip(plannedId) }
             .onSuccess { banner.value = "Marked as not done"; load() }
             .onFailure { banner.value = "Couldn't update: ${it.message}" }
     }
@@ -272,16 +247,5 @@ class CalendarViewModel @Inject constructor(
             }
             .onFailure { banner.value = "Failed to plan week: ${it.message}" }
         planning.value = false
-    }
-
-    fun schedule(template: WorkoutTemplate, start: LocalDate) = viewModelScope.launch {
-        banner.value = "Scheduling “${template.name}”…"
-        runCatching { repo.scheduleTemplate(ScheduleRequest(template_id = template.id, start_date = start.toString())) }
-            .onSuccess { r ->
-                banner.value = (r.error ?: "✓ Scheduled ${r.scheduled} session(s)") +
-                    (if (r.pushed > 0) " · pushed ${r.pushed} to Intervals" else "")
-                load()
-            }
-            .onFailure { banner.value = "Failed: ${it.message}" }
     }
 }

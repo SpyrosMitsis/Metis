@@ -1,3 +1,4 @@
+import { ADAPTIVE_COACH_VOICE } from "../_shared/prompt.ts";
 // coach-week-review — the coach's end-of-week recap for the dashboard. A short,
 // human, coach-voice paragraph that interprets how the week went (adherence, load
 // trend, the standout) and nudges into next week.
@@ -67,11 +68,12 @@ Deno.serve(async (req) => {
       .eq("id", userId)
       .single();
     const onboarding = (profile?.onboarding ?? {}) as Record<string, unknown>;
+    const {data: holds}=await admin.from("training_holds").select("reason,sport,area").eq("user_id",userId).eq("active",true);
 
     const [{ data: activities }, { data: planned }, goalRows] = await Promise.all([
       admin.from("effective_activities").select("date, type, tss, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", prevStart).lte("date", weekEnd).order("date", { ascending: true }),
-      admin.from("planned_workouts").select("date, type, completed")
+      admin.from("reconciled_session_plans").select("date, type, completed, skipped, reconciliation_status")
         .eq("user_id", userId).gte("date", weekStart).lte("date", weekEnd).neq("type", "rest"),
       // Anchored on the week being reviewed, so a recap of a past week counts
       // from that week rather than from today.
@@ -112,7 +114,7 @@ Deno.serve(async (req) => {
     const userPrompt = buildWeekReviewPrompt({
       name: (profile?.display_name as string) ?? "athlete",
       sessions: thisWeek.length,
-      adherenceDone: plan.filter((p) => p.completed).length,
+      adherenceDone: plan.filter((p) => !p.skipped && (p.completed || ["completed_as_planned", "modified", "substituted"].includes(p.reconciliation_status))).length,
       adherencePlanned: plan.length,
       tss,
       targetTss,
@@ -126,7 +128,7 @@ Deno.serve(async (req) => {
       goal: goalsText(onboarding),
       goalRace: goalRaceLine(goalRace, weekStart),
     });
-    const systemPrompt = WEEK_REVIEW_SYSTEM + memoryDocsBlock(memoryFromProfile(profile));
+    const systemPrompt = WEEK_REVIEW_SYSTEM + "\n" + ADAPTIVE_COACH_VOICE + "\nCurrent planning holds: " + JSON.stringify(holds??[]) + memoryDocsBlock(memoryFromProfile(profile));
 
     const { chain, resolveKey, resolveModel, resolveBaseUrl, hosted } = await llmAccess(admin, userId, profile);
     if (chain.length === 0) return json({ review: null, week_start: weekStart });

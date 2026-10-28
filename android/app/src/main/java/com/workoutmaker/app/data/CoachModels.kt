@@ -29,6 +29,15 @@ data class WorkoutFeedback(
     val actual_rpe: Int? = null,
     val difficulty: String? = null,   // too_easy | just_right | too_hard
     val notes: String? = null,
+    val activity_id: String? = null,
+    val reason: String? = null,
+    val outcome: String? = null,
+    val actual_minutes: Double? = null,
+    val pain_area: String? = null,
+    val soreness_area: String? = null,
+    val enjoyment: Int? = null,
+    val usefulness: Int? = null,
+    val unwanted_change: Boolean? = null,
 )
 
 @Serializable

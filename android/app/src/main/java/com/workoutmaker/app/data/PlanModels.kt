@@ -31,6 +31,8 @@ data class PlanStatus(
 
 @Serializable
 data class GenerateRequest(
+    val session_slot: Int = 0,
+    val objective: String? = null,
     val request_id: String = java.util.UUID.randomUUID().toString(),
     val date: String? = java.time.LocalDate.now().toString(),
     val type: String = "auto",
@@ -120,6 +122,7 @@ data class PlanWeekResult(
 
 @Serializable
 data class ScheduleRequest(
+    val request_id: String = java.util.UUID.randomUUID().toString(),
     val template_id: String,
     val start_date: String? = null,
     val push: Boolean = true,

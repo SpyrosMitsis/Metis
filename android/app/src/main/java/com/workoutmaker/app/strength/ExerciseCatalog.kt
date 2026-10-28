@@ -9,10 +9,19 @@ data class Exercise(
     val category: String,      // Barbell | Dumbbell | Machine | Cable | Bodyweight | Kettlebell | Cardio
     val compound: Boolean = false,
     val defaultRestSec: Int = if (compound) 150 else 90,
-)
+) {
+    val id: String get() = name.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+}
 
 object ExerciseCatalog {
     val all: List<Exercise> = listOf(
+        Exercise("Wall Push-Up", "Chest", "Bodyweight", compound = true),
+        Exercise("Resistance Band Row", "Back", "Band", compound = true),
+        Exercise("Resistance Band Chest Press", "Chest", "Band", compound = true),
+        Exercise("Resistance Band Pull-Apart", "Shoulders", "Band", compound = false),
+        Exercise("Resistance Band Bicep Curl", "Biceps", "Band", compound = false),
+        Exercise("Resistance Band Lateral Raise", "Shoulders", "Band", compound = false),
+
         // Additional home and gym variations (mirrored on server and Android).
         Exercise("Incline Push-Up", "Chest", "Bodyweight", compound = true),
         Exercise("Dumbbell Floor Press", "Chest", "Dumbbell", compound = true),
@@ -154,7 +163,7 @@ object ExerciseCatalog {
     )
 
     val categories: List<String> = listOf(
-        "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio",
+        "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Band", "Cardio",
     )
 
     private val byName = all.associateBy { it.name }

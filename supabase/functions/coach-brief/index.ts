@@ -1,3 +1,5 @@
+import { sessionState } from "../_shared/session_context.ts";
+import { ADAPTIVE_COACH_VOICE } from "../_shared/prompt.ts";
 import { activityMatchesPlanned } from "../_shared/activity_matching.ts";
 // coach-brief — the coach's proactive daily note for the dashboard. One short,
 // human, coach-voice sentence-or-two that interprets today (readiness + Form +
@@ -73,7 +75,7 @@ Deno.serve(async (req) => {
         .eq("user_id", userId).gte("date", since14).order("date", { ascending: false }),
       admin.from("effective_activities").select("date, type, tss, ctl, atl, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", since14).order("date", { ascending: true }),
-      admin.from("planned_workouts").select("id, date, type, completed, skipped, workout_json, created_at")
+      admin.from("reconciled_session_plans").select("id, date, type, completed, skipped, reconciliation_status, workout_json, created_at")
         .eq("user_id", userId).gte("date", yesterday).lte("date", today),
       fetchRecentDebriefs(admin, userId, yesterday, 4),
       upcomingGoals(admin, userId, today),
@@ -93,6 +95,8 @@ Deno.serve(async (req) => {
     const dated = (key: "hrv_rmssd" | "resting_hr") =>
       chrono.filter((w) => isNum((w as Record<string, unknown>)[key]))
         .map((w) => ({ date: (w as { date?: string }).date, value: (w as Record<string, number>)[key] }));
+    const planningState=await sessionState(admin,userId,onboarding,today,"rest");
+    if(planningState.readiness?.status==="pause")return json({brief:planningState.readiness.next_action,date:today,provider:"deterministic"});
     const recovery = computeRecovery(wells, dated("hrv_rmssd"), dated("resting_hr"), today);
 
     // Form (TSB) now + direction over the last week.
@@ -156,9 +160,7 @@ Deno.serve(async (req) => {
     const todayDebrief = debriefStr(debriefs.find((e) => e.date === today));
     const looksLike = activityMatchesPlanned;
     const actsYesterday = acts.filter((a) => a.date === yesterday);
-    const yesterdayMissed = !yesterdayDebrief && plannedYesterday.some((p) =>
-      p.skipped
-    );
+    const yesterdayExplicitlySkipped = !yesterdayDebrief && plannedYesterday.some((p) => p.skipped);
 
     // Body-composition trend: only worth a line in a 2-sentence note when the
     // athlete has a body goal AND there is a real slope. Best-effort, so a
@@ -184,7 +186,7 @@ Deno.serve(async (req) => {
       tsb: tsbNow,
       tsbTrend,
       todayPlan,
-      todayDone: !!primary?.completed,
+      todayDone: !!primary?.completed && !primary?.skipped || ["completed_as_planned", "modified", "substituted"].includes(primary?.reconciliation_status),
       phase: trainingPhase(weeksToGoal),
       // The training goal and the dated goal are two facts, from two places.
       goal: goalsText(onboarding),
@@ -194,12 +196,12 @@ Deno.serve(async (req) => {
       readinessBasis: recovery.basis,
       yesterdayDebrief,
       todayDebrief,
-      yesterdayMissed,
+      yesterdayMissed: yesterdayExplicitlySkipped,
       bodyTrend: bodyTrendLine,
     });
     // Lead with the coach's soul/voice + durable knowledge so the note sounds
     // like a continuation of this relationship, not a generic tip.
-    const systemPrompt = BRIEF_SYSTEM +
+    const systemPrompt = BRIEF_SYSTEM + "\n" + ADAPTIVE_COACH_VOICE + "\nCurrent planning context: " + JSON.stringify(planningState.readiness) +
       profileFactsBlock(onboarding, profile?.display_name as string | undefined) +
       memoryDocsBlock(memoryFromProfile(profile));
 

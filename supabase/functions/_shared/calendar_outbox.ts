@@ -9,6 +9,10 @@ export async function drainCalendarOutbox(admin: SupabaseClient, owner: string) 
   const events: Record<string,string> = {};
   let error: string | null = null;
   try {
+    const { data: pending, error: pendingError } = await admin.from("calendar_outbox").select("id")
+      .eq("user_id",owner).is("finished_at",null).limit(1);
+    if (pendingError) throw new Error(pendingError.message);
+    if (!pending?.length) return { events, error: null };
     const { data: profile } = await admin.from("user_profiles")
       .select("intervals_athlete_id, intervals_api_key_encrypted").eq("id", owner).single();
     if (!profile?.intervals_athlete_id || !profile?.intervals_api_key_encrypted) return { events, error: "Calendar sync pending: connect Intervals.icu." };
@@ -29,10 +33,10 @@ export async function drainCalendarOutbox(admin: SupabaseClient, owner: string) 
       if (!job) break;
       let failure: string | null = null;
       try {
-        const { data: current, error: readError } = await admin.from("planned_workouts").select("*")
+        const { data: current, error: readError } = await admin.from("reconciled_session_plans").select("*")
           .eq("id", job.planned_id).eq("user_id", owner).maybeSingle();
         if (readError) throw new Error(readError.message);
-        const removing = job.operation === "delete" || !current || current.skipped || current.type === "rest";
+        const removing = job.operation === "delete" || !current || current.skipped || current.type === "rest" && Number((current.workout_json as Workout)?.duration_minutes ?? 0) === 0;
         const row = removing ? job.payload : current;
         const externalId = `workout-maker:${job.planned_id}`;
         let eventId = current?.intervals_event_id ?? job.event_id;
@@ -40,19 +44,31 @@ export async function drainCalendarOutbox(admin: SupabaseClient, owner: string) 
           // API-key users cannot assume OAuth-only upsert semantics. Look up
           // our stable identity before retrying an ambiguous create timeout.
           const end = new Date(row.date + "T12:00:00Z"); end.setUTCDate(end.getUTCDate()+1);
-          const existing = await call(`?oldest=${row.date}&newest=${end.toISOString().slice(0,10)}`) as Array<{id: string|number;external_id?:string}>;
+          const existingResult = await call(`?oldest=${row.date}&newest=${end.toISOString().slice(0,10)}`);
+          const existing = Array.isArray(existingResult) ? existingResult as Array<{id: string|number;external_id?:string}>
+            : ((existingResult as { events?: Array<{id: string|number;external_id?:string}> } | null)?.events ?? []);
           eventId = existing.find(e => e.external_id === externalId)?.id;
         }
         if (removing) {
           if (eventId) await call(`/${encodeURIComponent(eventId)}`, "DELETE");
         } else {
           const workout = row.workout_json as Workout;
-          const payload = { external_id: externalId, category: "WORKOUT", start_date_local: `${row.date}T00:00:00`,
+          const payload = { external_id: externalId, category: "WORKOUT", start_date_local: `${row.date}T${String(Math.floor((row.start_minute ?? 0) / 60)).padStart(2,"0")}:${String((row.start_minute ?? 0) % 60).padStart(2,"0")}:00`,
             name: workout.title, description: renderIntervalsWorkout(workout),
             type: ({ run: "Run", ride: "Ride", swim: "Swim", strength: "WeightTraining" } as Record<string,string>)[workout.type] ?? "Workout" };
-          if (eventId) await call(`/${encodeURIComponent(eventId)}`, "PUT", payload);
-          else {
-            const created = await call("", "POST", payload) as { id?: string|number };
+          if (eventId) {
+            try { await call(`/${encodeURIComponent(eventId)}`, "PUT", payload); }
+            catch (e) {
+              if (!(e instanceof Error) || !e.message.includes("PUT failed (404)")) throw e;
+              eventId = undefined;
+            }
+          }
+          if (!eventId) {
+            // Stable external_id plus provider upsert makes a retry safe even
+            // when the provider accepted a create but the response was lost.
+            const createdResult = await call("/bulk?upsert=true", "POST", [payload]);
+            const created = Array.isArray(createdResult) ? createdResult[0]
+              : ((createdResult as { events?: Array<{id?:string|number}> } | null)?.events?.[0] ?? createdResult) as { id?: string|number };
             if (!created?.id) throw new Error("Calendar returned no event identity");
             eventId = created.id;
           }

@@ -41,12 +41,12 @@ export const WORKOUT_JSON_SCHEMA = `{
 
 // Real JSON Schema mirrors of WORKOUT_JSON_SCHEMA/WEEK_JSON_SCHEMA below, for
 // providers that support forcing schema-shaped output via native tool-calling
-// (see GenArgs.jsonSchema in llm.ts). Deliberately permissive, no "required" /
-// additionalProperties:false, to match workout_schema.ts's tolerant zod
-// coercion, this only needs to get the model to emit a matching JSON object,
-// not to replace the existing validation/repair layer.
+// (see GenArgs.jsonSchema in llm.ts). Require executable identity and dose
+// fields; optional metadata remains flexible. Compilation still owns dose
+// arithmetic, eligibility and repairs.
 const EXERCISE_TOOL_SCHEMA = {
   type: "object",
+  required: ["name", "sets", "reps"],
   properties: {
     name: { type: "string" },
     sets: { type: "number" },
@@ -55,12 +55,14 @@ const EXERCISE_TOOL_SCHEMA = {
     pace_zone: { type: ["string", "null"] },
     hr_zone: { type: ["string", "null"] },
     rest_seconds: { type: ["number", "null"] },
+    dose: { type: "object", properties: { work_seconds: { type: "number" }, distance_m: { type: "number" }, stroke: { type: "string" }, recovery_after_last: { type: "boolean" }, transition_seconds: { type: "number" } } },
     notes: { type: "string" },
   },
 };
 
 const SECTION_TOOL_SCHEMA = {
   type: "object",
+  required: ["name", "exercises"],
   properties: {
     name: { type: "string" },
     duration_minutes: { type: "number" },
@@ -70,6 +72,7 @@ const SECTION_TOOL_SCHEMA = {
 
 export const WORKOUT_TOOL_SCHEMA = {
   type: "object",
+  required: ["type", "title", "duration_minutes", "rpe_target", "sections", "coach_note"],
   properties: {
     type: { type: "string", enum: ["run", "ride", "swim", "strength", "rest"] },
     title: { type: "string" },
@@ -111,8 +114,8 @@ Endurance / running:
   race-specific) → Peak (sharpening, lower volume/high quality) → Taper (cut
   volume 40-60%, keep some intensity) the 1-2 weeks before a goal race.
 - Progression: increase weekly volume by no more than ~10%. Keep the
-  acute:chronic workload ratio (last 7d load / last 28d avg) roughly 0.8-1.3;
-  above ~1.5 sharply raises injury risk.
+  acute:chronic workload ratio (last 7d load / last 28d avg) descriptive only;
+  it does not define a safe zone or predict an individual injury.
 - Key run types: Easy/recovery (Z1-2), Long run (Z2, ≤30-35% of weekly volume),
   Tempo/Threshold (Z3-Z4, "comfortably hard", 20-40 min), VO2max intervals
   (Z5, 3-5 min reps, work:rest ~1:1), Strides (6-10×~20s relaxed fast).
@@ -164,7 +167,7 @@ TSB from absent data is NOT "fatigued"; treat it as neutral and trust experience
 Swimming: aerobic, technique-driven. Prescribe sets in metres at a pace zone
 (easy/aerobic Z1-Z2, threshold/CSS Z3-Z4, fast Z5) with rest intervals, e.g.
 "8×100m @ Z3, 20s rest". Include a warm-up and drills (technique/kick/pull). Use
-pace_zone/hr_zone (weight_kg null), like running. Lower injury risk, so it's a good
+pace_zone/hr_zone (weight_kg null), like running. Different mechanical demands, so it may be a useful
 easy/recovery or cross-training option around hard run/leg days.
 
 Cycling (ride): aerobic endurance like running but lower impact, use it for extra
@@ -195,7 +198,7 @@ export const CHAT_COACHING_DIGEST = `TRAINING SCIENCE YOU REASON FROM:
 - Intensity: roughly 80% of endurance work easy (Z1-Z2), 20% hard. At most 2-3
   hard sessions a week, never back to back, easy after quality.
 - Progression: weekly volume up ~10% at most. Acute:chronic load (7d vs 28d avg)
-  is healthy around 0.8-1.3; past ~1.5 injury risk climbs sharply.
+  is descriptive context, not a healthy zone, diagnosis or individual injury prediction.
 - Periodization: Base (aerobic volume) to Build (threshold and VO2) to Peak
   (sharpen, less volume) to Taper (cut volume 40-60%, keep some intensity).
 - Form, read as words not numbers: above +5 fresh and ready for quality, -10 to
@@ -280,7 +283,9 @@ fences, no commentary. It MUST exactly match this schema:
 ${WORKOUT_JSON_SCHEMA}
 
 Rules:
-- "type" is exactly one of: run, ride, strength, rest.
+- "type" is exactly one of: run, ride, swim, strength, rest.
+- Every endurance exercise MUST include dose.work_seconds (per repetition, including distance-based repetitions), dose.recovery_after_last, and dose.transition_seconds. Swimming also includes dose.stroke. sets is the number of work repetitions; rest_seconds is recovery between them, never a send-off time. Do not encode instructions only in prose.
+- Your output is a proposal. The deterministic compiler recomputes dose, targets and instructions and rejects unavailable equipment, ambiguous units or excessive duration.
 - Every numeric field is a JSON number; use null where a field does not apply
   (weight_kg for runs, pace_zone/hr_zone for strength).
 - "reps" is a string so it can hold ranges/notations like "8-10", "AMRAP",
@@ -436,7 +441,7 @@ export function buildRunPrompt(c: RunContext): string {
     : "very fatigued, recovery or rest";
   const proposedMax = (c.weeklyKm * 0.1).toFixed(1);
   const acwrNote = c.acwr == null ? "n/a"
-    : `${c.acwr.toFixed(2)} (${c.acwr > 1.5 ? "HIGH injury risk, hold volume" : c.acwr < 0.8 ? "detraining zone, can build" : "in the safe 0.8-1.3 band"})`;
+    : `${c.acwr.toFixed(2)} (recorded recent load relative to baseline; not an injury prediction or automatic progression instruction)`;
   const rideNote = sport === "ride"
     ? `\n\nThis is a CYCLING session ("type":"ride"), program it like a cyclist, not a runner on a bike:
 - Power zones${c.ftp ? ` off FTP ${c.ftp}W` : " (set %FTP targets in each exercise's notes)"}: Z1 active recovery <55%, Z2 endurance 56-75%, Z3 tempo/sweet-spot 84-97% (the efficiency sweet spot for time-crunched build), Z4 threshold 98-105%, Z5 VO2max 106-120%.${c.ftp ? ` Translate each interval to WATTS (e.g. "3×8min @ ${Math.round(c.ftp * 0.95)}W").` : ""}
@@ -555,17 +560,15 @@ ATHLETE CONTEXT
 - Working weights / main lifts (the athlete's most recent TOP set per exercise): ${lifts}
 - Session length: ${c.durationNote}
 
-PROGRESSIVE OVERLOAD (critical): exercises above with a NEXT TARGET carry the
-athlete's in-app progression engine's prescription, the exact number they will
-see while lifting. Program those exercises at EXACTLY the target weight and reps
-(back off only if soreness is high or that muscle was trained in the last 48h).
-For logged exercises without a target, meet or beat the last top set. Prescribe
-the actual working weight in "weight_kg" (kg), not a back-off or warm-up load.
+PROGRESSION: NEXT TARGET is the exercise-specific upper bound, not a minimum.
+Repeat or reduce weight, repetitions or sets for recovery, interruptions,
+familiarization and reduced-load weeks. Never force work back to a previous top
+set. Keep warm-up sets separate from working sets. Never transfer kilograms
+between different exercises, equipment or assistance mechanisms.
 
-VARIETY: vary exercise selection across the week to avoid staleness, but pick
-variations from the athlete's own repertoire (the exercises they actually log);
-they map to the equipment their gym really has. Keep progression on the main
-compound lifts and don't reprint an identical session.
+CONTINUITY: preserve useful exercises and successful sessions. Change exercises
+for a concrete goal, equipment constraint or fatigue reason. Use only bundled
+catalog exercises and the athlete's actual available implements.
 
 Program loads as %1RM where known, compounds first, with explicit target RIR in
 each exercise's notes. Respect 48h muscle recovery and weekly volume landmarks.
@@ -843,3 +846,6 @@ SIGNALS (for YOUR reasoning, interpret them, don't read them back):
 
 Write the 2-4 sentence recap now.`;
 }
+
+
+export const ADAPTIVE_COACH_VOICE = `When training differs from the plan, separate execution from the quality of the athlete's decision. A suitable easier or substituted session can be useful. Preserve user reports and device observations when they disagree; explain uncertainty without inventing a resolution. Never diagnose overtraining or give a precise injury probability from readiness, TSS or a load ratio. Give one useful next action, no scolding or metric recital. Ground numbers in retrieved structured facts and label estimates. Use preview_adaptation for changes after missed or changed sessions, rather than replacing the week. Ask only for missing information that would change the next decision; inspect available data first. Report the latest saved calendar, never the intended or earlier plan. A pain/illness planning hold is not medical clearance to resume.`;

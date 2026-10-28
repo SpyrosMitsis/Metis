@@ -1,0 +1,1491 @@
+[
+  {
+    "name": "Wall Push-Up",
+    "id": "wall_push_up",
+    "movement": "horizontal_push",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Resistance Band Row",
+    "id": "resistance_band_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "resistance_band",
+      "band_anchor"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "band",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Resistance Band Chest Press",
+    "id": "resistance_band_chest_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "resistance_band",
+      "band_anchor"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "band",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Resistance Band Pull-Apart",
+    "id": "resistance_band_pull_apart",
+    "movement": "accessory",
+    "implements": [
+      "resistance_band"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "band",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Resistance Band Bicep Curl",
+    "id": "resistance_band_bicep_curl",
+    "movement": "accessory",
+    "implements": [
+      "resistance_band"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "band",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Resistance Band Lateral Raise",
+    "id": "resistance_band_lateral_raise",
+    "movement": "accessory",
+    "implements": [
+      "resistance_band"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "band",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Incline Push-Up",
+    "id": "incline_push_up",
+    "movement": "horizontal_push",
+    "implements": [
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Floor Press",
+    "id": "dumbbell_floor_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Chest-Supported Dumbbell Row",
+    "id": "chest_supported_dumbbell_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Assisted Pull-Up",
+    "id": "assisted_pull_up",
+    "movement": "vertical_pull",
+    "implements": [
+      "assisted_pullup_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "assistance",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Inverted Row",
+    "id": "inverted_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "rack",
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Pike Push-Up",
+    "id": "pike_push_up",
+    "movement": "horizontal_push",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Shrug",
+    "id": "dumbbell_shrug",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Bodyweight Squat",
+    "id": "bodyweight_squat",
+    "movement": "squat",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Reverse Lunge (Bodyweight)",
+    "id": "reverse_lunge_bodyweight",
+    "movement": "lunge",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Split Squat (Bodyweight)",
+    "id": "split_squat_bodyweight",
+    "movement": "lunge",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Reverse Lunge (Dumbbell)",
+    "id": "reverse_lunge_dumbbell",
+    "movement": "lunge",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Romanian Deadlift (Dumbbell)",
+    "id": "romanian_deadlift_dumbbell",
+    "movement": "hinge",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Single-Leg Romanian Deadlift (Dumbbell)",
+    "id": "single_leg_romanian_deadlift_dumbbell",
+    "movement": "hinge",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Glute Bridge (Bodyweight)",
+    "id": "glute_bridge_bodyweight",
+    "movement": "hinge",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Single-Leg Glute Bridge",
+    "id": "single_leg_glute_bridge",
+    "movement": "hinge",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Hip Thrust (Dumbbell)",
+    "id": "hip_thrust_dumbbell",
+    "movement": "hinge",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Standing Calf Raise (Bodyweight)",
+    "id": "standing_calf_raise_bodyweight",
+    "movement": "accessory",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Single-Leg Calf Raise (Bodyweight)",
+    "id": "single_leg_calf_raise_bodyweight",
+    "movement": "accessory",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Standing Calf Raise (Dumbbell)",
+    "id": "standing_calf_raise_dumbbell",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Side Plank",
+    "id": "side_plank",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "seconds",
+    "unilateral": true
+  },
+  {
+    "name": "Dead Bug",
+    "id": "dead_bug",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Bird Dog",
+    "id": "bird_dog",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Beginner",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Pallof Press",
+    "id": "pallof_press",
+    "movement": "core",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Reverse Crunch",
+    "id": "reverse_crunch",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Kettlebell Goblet Squat",
+    "id": "kettlebell_goblet_squat",
+    "movement": "squat",
+    "implements": [
+      "kettlebell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Kettlebell Deadlift",
+    "id": "kettlebell_deadlift",
+    "movement": "hinge",
+    "implements": [
+      "kettlebell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Barbell Bench Press",
+    "id": "barbell_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "barbell",
+      "stable_bench",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Incline Barbell Bench Press",
+    "id": "incline_barbell_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "barbell",
+      "stable_bench",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Decline Barbell Bench Press",
+    "id": "decline_barbell_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "barbell",
+      "stable_bench",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Bench Press",
+    "id": "dumbbell_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Incline Dumbbell Bench Press",
+    "id": "incline_dumbbell_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Fly",
+    "id": "dumbbell_fly",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Cable Crossover",
+    "id": "cable_crossover",
+    "movement": "horizontal_push",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Pec Deck",
+    "id": "pec_deck",
+    "movement": "accessory",
+    "implements": [
+      "pec_deck_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Machine Chest Press",
+    "id": "machine_chest_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "machine_chest_press_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Push-Up",
+    "id": "push_up",
+    "movement": "horizontal_push",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dips (Chest)",
+    "id": "dips_chest",
+    "movement": "accessory",
+    "implements": [
+      "dip_bars"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Deadlift",
+    "id": "deadlift",
+    "movement": "hinge",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Barbell Row",
+    "id": "barbell_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Pendlay Row",
+    "id": "pendlay_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "T-Bar Row",
+    "id": "t_bar_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Row",
+    "id": "dumbbell_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Pull-Up",
+    "id": "pull_up",
+    "movement": "vertical_pull",
+    "implements": [
+      "pullup_bar"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Chin-Up",
+    "id": "chin_up",
+    "movement": "vertical_pull",
+    "implements": [
+      "pullup_bar"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Lat Pulldown",
+    "id": "lat_pulldown",
+    "movement": "vertical_pull",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Seated Cable Row",
+    "id": "seated_cable_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Straight-Arm Pulldown",
+    "id": "straight_arm_pulldown",
+    "movement": "vertical_pull",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Machine Row",
+    "id": "machine_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "machine_row_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Rack Pull",
+    "id": "rack_pull",
+    "movement": "accessory",
+    "implements": [
+      "barbell",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Overhead Press",
+    "id": "overhead_press",
+    "movement": "vertical_push",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Seated Dumbbell Press",
+    "id": "seated_dumbbell_press",
+    "movement": "vertical_push",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Arnold Press",
+    "id": "arnold_press",
+    "movement": "vertical_push",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Lateral Raise",
+    "id": "lateral_raise",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Cable Lateral Raise",
+    "id": "cable_lateral_raise",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Front Raise",
+    "id": "front_raise",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Rear Delt Fly",
+    "id": "rear_delt_fly",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Reverse Pec Deck",
+    "id": "reverse_pec_deck",
+    "movement": "accessory",
+    "implements": [
+      "reverse_pec_deck_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Face Pull",
+    "id": "face_pull",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Barbell Shrug",
+    "id": "barbell_shrug",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Upright Row",
+    "id": "upright_row",
+    "movement": "horizontal_pull",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Barbell Curl",
+    "id": "barbell_curl",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "EZ-Bar Curl",
+    "id": "ez_bar_curl",
+    "movement": "accessory",
+    "implements": [
+      "ez_bar"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Curl",
+    "id": "dumbbell_curl",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Hammer Curl",
+    "id": "hammer_curl",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Incline Dumbbell Curl",
+    "id": "incline_dumbbell_curl",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Preacher Curl",
+    "id": "preacher_curl",
+    "movement": "accessory",
+    "implements": [
+      "preacher_curl_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Cable Curl",
+    "id": "cable_curl",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Concentration Curl",
+    "id": "concentration_curl",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Close-Grip Bench Press",
+    "id": "close_grip_bench_press",
+    "movement": "horizontal_push",
+    "implements": [
+      "barbell",
+      "stable_bench",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Triceps Pushdown",
+    "id": "triceps_pushdown",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Rope Pushdown",
+    "id": "rope_pushdown",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Overhead Cable Extension",
+    "id": "overhead_cable_extension",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Skullcrusher",
+    "id": "skullcrusher",
+    "movement": "accessory",
+    "implements": [
+      "ez_bar",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dumbbell Overhead Extension",
+    "id": "dumbbell_overhead_extension",
+    "movement": "accessory",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Dips (Triceps)",
+    "id": "dips_triceps",
+    "movement": "accessory",
+    "implements": [
+      "dip_bars"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Bench Dip",
+    "id": "bench_dip",
+    "movement": "accessory",
+    "implements": [
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Back Squat",
+    "id": "back_squat",
+    "movement": "squat",
+    "implements": [
+      "barbell",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Front Squat",
+    "id": "front_squat",
+    "movement": "squat",
+    "implements": [
+      "barbell",
+      "rack"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Hack Squat",
+    "id": "hack_squat",
+    "movement": "squat",
+    "implements": [
+      "hack_squat_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Leg Press",
+    "id": "leg_press",
+    "movement": "accessory",
+    "implements": [
+      "leg_press_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Goblet Squat",
+    "id": "goblet_squat",
+    "movement": "squat",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Bulgarian Split Squat",
+    "id": "bulgarian_split_squat",
+    "movement": "lunge",
+    "implements": [
+      "dumbbells",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Walking Lunge",
+    "id": "walking_lunge",
+    "movement": "lunge",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": true
+  },
+  {
+    "name": "Leg Extension",
+    "id": "leg_extension",
+    "movement": "accessory",
+    "implements": [
+      "leg_extension_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Step-Up",
+    "id": "step_up",
+    "movement": "lunge",
+    "implements": [
+      "dumbbells",
+      "stable_step"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Romanian Deadlift",
+    "id": "romanian_deadlift",
+    "movement": "hinge",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Lying Leg Curl",
+    "id": "lying_leg_curl",
+    "movement": "accessory",
+    "implements": [
+      "lying_leg_curl_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Seated Leg Curl",
+    "id": "seated_leg_curl",
+    "movement": "accessory",
+    "implements": [
+      "seated_leg_curl_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Nordic Curl",
+    "id": "nordic_curl",
+    "movement": "accessory",
+    "implements": [
+      "nordic_anchor"
+    ],
+    "difficulty": "Advanced",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Good Morning",
+    "id": "good_morning",
+    "movement": "hinge",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Stiff-Leg Deadlift",
+    "id": "stiff_leg_deadlift",
+    "movement": "hinge",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Hip Thrust",
+    "id": "hip_thrust",
+    "movement": "hinge",
+    "implements": [
+      "barbell",
+      "stable_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Glute Bridge",
+    "id": "glute_bridge",
+    "movement": "hinge",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Beginner",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Cable Kickback",
+    "id": "cable_kickback",
+    "movement": "accessory",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Hip Abduction",
+    "id": "hip_abduction",
+    "movement": "accessory",
+    "implements": [
+      "hip_abduction_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Standing Calf Raise",
+    "id": "standing_calf_raise",
+    "movement": "accessory",
+    "implements": [
+      "standing_calf_raise_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Seated Calf Raise",
+    "id": "seated_calf_raise",
+    "movement": "accessory",
+    "implements": [
+      "seated_calf_raise_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Leg Press Calf Raise",
+    "id": "leg_press_calf_raise",
+    "movement": "accessory",
+    "implements": [
+      "leg_press_calf_raise_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Plank",
+    "id": "plank",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "seconds",
+    "unilateral": false
+  },
+  {
+    "name": "Hanging Leg Raise",
+    "id": "hanging_leg_raise",
+    "movement": "core",
+    "implements": [
+      "pullup_bar"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "seconds",
+    "unilateral": false
+  },
+  {
+    "name": "Cable Crunch",
+    "id": "cable_crunch",
+    "movement": "core",
+    "implements": [
+      "cable_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Ab Wheel Rollout",
+    "id": "ab_wheel_rollout",
+    "movement": "core",
+    "implements": [
+      "ab_wheel"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Russian Twist",
+    "id": "russian_twist",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Decline Sit-Up",
+    "id": "decline_sit_up",
+    "movement": "core",
+    "implements": [
+      "decline_bench"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Mountain Climber",
+    "id": "mountain_climber",
+    "movement": "core",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Wrist Curl",
+    "id": "wrist_curl",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Reverse Wrist Curl",
+    "id": "reverse_wrist_curl",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Farmer's Walk",
+    "id": "farmer_s_walk",
+    "movement": "carry",
+    "implements": [
+      "dumbbells"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "distance",
+    "unilateral": false
+  },
+  {
+    "name": "Power Clean",
+    "id": "power_clean",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Advanced",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Clean and Jerk",
+    "id": "clean_and_jerk",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Advanced",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Snatch",
+    "id": "snatch",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Advanced",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Kettlebell Swing",
+    "id": "kettlebell_swing",
+    "movement": "hinge",
+    "implements": [
+      "kettlebell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Thruster",
+    "id": "thruster",
+    "movement": "accessory",
+    "implements": [
+      "barbell"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Burpee",
+    "id": "burpee",
+    "movement": "accessory",
+    "implements": [],
+    "difficulty": "Intermediate",
+    "load_mode": "bodyweight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Treadmill Run",
+    "id": "treadmill_run",
+    "movement": "accessory",
+    "implements": [
+      "treadmill_run_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Rowing Machine",
+    "id": "rowing_machine",
+    "movement": "accessory",
+    "implements": [
+      "rowing_machine_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Assault Bike",
+    "id": "assault_bike",
+    "movement": "accessory",
+    "implements": [
+      "assault_bike_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Stair Climber",
+    "id": "stair_climber",
+    "movement": "accessory",
+    "implements": [
+      "stair_climber_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  },
+  {
+    "name": "Elliptical",
+    "id": "elliptical",
+    "movement": "accessory",
+    "implements": [
+      "elliptical_machine"
+    ],
+    "difficulty": "Intermediate",
+    "load_mode": "added_weight",
+    "logging": "reps",
+    "unilateral": false
+  }
+]

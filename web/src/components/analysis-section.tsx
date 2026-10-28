@@ -128,6 +128,7 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
   };
 
   const chart = useMemo(() => buildChartData(a), [a]);
+  const paceUnit = a?.pace_unit ?? "/km";
 
   return (
     <div className="space-y-4">
@@ -144,7 +145,7 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
         {!a && (
           <>
             <p className="text-sm text-muted-foreground">
-              See how well you stuck to the plan: an execution score, target vs actual pace, splits, and AI coach feedback.
+              Review the recorded dose, effort evidence, splits and coach feedback. Missing measurements remain unknown.
             </p>
             <Button variant="outline" className="w-full" disabled={busy} onClick={() => analyze()}>
               <Sparkles className="h-4 w-4" />
@@ -157,6 +158,7 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
         {a && (
           <>
             <ScoreHeader score={a.score} label={a.label} plannedTitle={a.planned_title} />
+              {a.execution_evidence && <p className="text-sm">{a.execution_evidence.summary}</p>}
             <Components components={a.components ?? []} />
           </>
         )}
@@ -167,7 +169,7 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
           title={
             "Pace" +
             (a?.target?.pace_lo != null && a?.target?.pace_hi != null
-              ? ` · target ${fmtPaceSec(a.target.pace_lo)}-${fmtPaceSec(a.target.pace_hi)} /km`
+              ? ` · target ${fmtPaceSec(a.target.pace_lo)}-${fmtPaceSec(a.target.pace_hi)} ${paceUnit}`
               : "")
           }
         >
@@ -180,7 +182,7 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
                 tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" width={44}
               />
               <Tooltip
-                formatter={(v) => [`${fmtPaceSec(Number(v))} /km`, "pace"]}
+                formatter={(v) => [`${fmtPaceSec(Number(v))} ${paceUnit}`, "pace"]}
                 labelFormatter={(l) => `${l} min`}
                 contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
               />
@@ -223,8 +225,8 @@ export function ActivityAnalysisSection({ activityId }: { activityId: string }) 
           <p className="label-caps" style={{ color: "hsl(var(--accent))" }}>Splits</p>
           {a.splits!.map((s) => (
             <div key={s.km} className="flex items-center gap-3 text-sm">
-              <span className="w-14 text-xs text-muted-foreground">km {s.km % 1 === 0 ? s.km.toFixed(0) : s.km}</span>
-              <span className="font-medium tabular-nums">{fmtPaceSec(s.sec)} /km</span>
+              <span className="w-14 text-xs text-muted-foreground">{a.pace_unit === "/100m" ? `${Math.round(s.km * 1000)} m` : `km ${s.km % 1 === 0 ? s.km.toFixed(0) : s.km}`}</span>
+              <span className="font-medium tabular-nums">{fmtPaceSec(s.sec)} {paceUnit}</span>
               <span className="ml-auto text-xs text-muted-foreground">{s.avg_hr ? `♥ ${s.avg_hr}` : ""}</span>
             </div>
           ))}
@@ -269,7 +271,7 @@ function buildChartData(a: ActivityAnalysis | null) {
 
 // --- strength ----------------------------------------------------------------
 
-export function StrengthAnalysisSection({ date }: { date: string }) {
+export function StrengthAnalysisSection({ date, workoutId }: { date: string; workoutId?: string }) {
   const [a, setA] = useState<StrengthAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -278,17 +280,17 @@ export function StrengthAnalysisSection({ date }: { date: string }) {
     let cancelled = false;
     setA(null);
     setError(null);
-    api.analyzeStrength(date, { peek: true })
+    api.analyzeStrength(date, { peek: true, workout_id: workoutId })
       .then((res) => { if (!cancelled && res.ok) setA(res); })
       .catch(() => { /* peek is best-effort */ });
     return () => { cancelled = true; };
-  }, [date]);
+  }, [date, workoutId]);
 
   const analyze = async (force = false) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.analyzeStrength(date, { force });
+      const res = await api.analyzeStrength(date, { force, workout_id: workoutId });
       if (res.ok) setA(res);
       else setError(res.error ?? "Couldn't analyze this session.");
     } catch (e) {
@@ -324,6 +326,8 @@ export function StrengthAnalysisSection({ date }: { date: string }) {
       {a && (
         <>
           <ScoreHeader score={a.score} label={a.label} plannedTitle={a.planned_title} />
+          {a.coverage_evidence && <p className="text-sm">Exact exercises: {a.coverage_evidence.exact}/{a.coverage_evidence.total} · Movement coverage: {a.coverage_evidence.movement}/{a.coverage_evidence.total} · Muscle overlap: {a.coverage_evidence.muscle}/{a.coverage_evidence.total}</p>}
+          {a.dose_evidence?.map(dose => <p key={dose.exercise} className="text-xs text-muted-foreground">{dose.exercise}: {dose.logged_sets}/{dose.planned_sets} working sets recorded; {dose.sets_in_rep_range == null ? "units need confirmation" : `${dose.sets_in_rep_range} in the planned rep range`}</p>)}
           <Components components={a.components ?? []} />
 
           {(a.watch || a.total_volume_kg != null) && (

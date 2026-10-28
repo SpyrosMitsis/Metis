@@ -13,7 +13,7 @@ import java.time.format.DateTimeFormatter
 // ============================================================================
 
 object StrengthCsvImport {
-    data class ParsedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "")
+    data class ParsedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "", val quantityUnit: String = "reps")
     data class ParsedExercise(val name: String, val sets: List<ParsedSet>)
     data class ParsedWorkout(val name: String, val startedAt: Long, val exercises: List<ParsedExercise>)
     data class ImportResult(
@@ -101,7 +101,7 @@ object StrengthCsvImport {
             val note = if (iNote >= 0) col(iNote).take(200) else ""
             workouts.getOrPut(key) { LinkedHashMap() }
                 .getOrPut(exName) { mutableListOf() }
-                .add(ParsedSet(round2(weight), reps, rpe, isWarmup, note))
+                .add(ParsedSet(round2(weight), reps, rpe, isWarmup, note, if (header.indexOf("quantity unit") >= 0) cols.getOrNull(header.indexOf("quantity unit"))?.takeIf { it in setOf("reps", "seconds", "metres", "minutes") } ?: "reps" else "reps"))
         }
 
         val parsed = workouts.map { (key, exMap) ->

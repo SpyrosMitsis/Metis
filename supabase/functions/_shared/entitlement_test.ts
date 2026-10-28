@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
+import { PROFILE_COLUMNS_GENERATION } from "./supabase.ts";
 import { hostedLlm, isPro, wantsHostedAi } from "./entitlement.ts";
 
 const HOSTED_VARS = ["HOSTED_LLM_PROVIDER", "HOSTED_LLM_KEY", "HOSTED_LLM_MODEL", "HOSTED_AI_DISABLED"];
@@ -60,5 +61,14 @@ Deno.test("wantsHostedAi: needs pro + toggle (default on) + deployment config", 
     assertEquals(wantsHostedAi(pro), true);
     assertEquals(wantsHostedAi({ ...pro, use_hosted_ai: false }), false); // BYO opt-out
     assertEquals(wantsHostedAi({ plan: "free" }), false);
+  });
+});
+
+Deno.test("generation profile projection preserves hosted access, opt-out and expiry", () => {
+  withEnv({ HOSTED_LLM_PROVIDER: "groq", HOSTED_LLM_KEY: "fixture" }, () => {
+    const project = (row: Record<string, unknown>) => Object.fromEntries(PROFILE_COLUMNS_GENERATION.split(",").map(k => k.trim()).map(k => [k,row[k]]));
+    assertEquals(wantsHostedAi(project({plan:"pro",use_hosted_ai:true})), true);
+    assertEquals(wantsHostedAi(project({plan:"pro",use_hosted_ai:false})), false);
+    assertEquals(wantsHostedAi(project({plan:"pro",use_hosted_ai:true,plan_expires_at:"2000-01-01T00:00:00Z"})), false);
   });
 });

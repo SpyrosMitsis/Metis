@@ -82,6 +82,7 @@ async function syncUserData(admin: SupabaseClient, userId: string): Promise<Sync
     distance_m: a.distance ?? null,
     avg_hr: a.average_heartrate != null ? Math.round(a.average_heartrate) : null,
     tss: a.icu_training_load ?? null,
+    measurement_provenance: { duration_seconds: a.moving_time == null ? "unavailable" : "observed", distance_m: a.distance == null ? "unavailable" : "observed", avg_hr: a.average_heartrate == null ? "unavailable" : "observed", tss: a.icu_training_load == null ? "unavailable" : "provider_reported" },
     ctl: a.icu_ctl ?? null,
     atl: a.icu_atl ?? null,
     data_json: a,

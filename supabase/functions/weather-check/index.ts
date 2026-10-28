@@ -76,7 +76,7 @@ Deno.serve(async (req) => {
       return json(suppressed("no_location"));
     }
 
-    const { data: rows } = await admin.from("planned_workouts")
+    const { data: rows } = await admin.from("reconciled_session_plans")
       .select("id, type, completed, skipped, locked, created_at, workout_json")
       .eq("user_id", userId).eq("date", date as string);
 

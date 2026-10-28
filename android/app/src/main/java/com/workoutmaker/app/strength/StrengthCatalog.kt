@@ -61,7 +61,7 @@ class StrengthCatalog @Inject constructor(
     }
 
     suspend fun deleteCustomExercise(name: String) {
-        repo.deleteCustomExercise(name)
+        repo.deleteCustomExercise(name, hideFromStats = true)
         _customExercises.value = ExerciseCatalog.custom()
     }
 

@@ -257,6 +257,7 @@ class OnboardingViewModel @Inject constructor(
             // saveProfile flips onboarding_complete → enters the app. Entering
             // without the save would leave every downstream feature profileless.
             .onSuccess {
+                prefs.setFeatureTourPending(true)
                 if (celebrate) {
                     celebrating.value = true
                     delay(CELEBRATION_MS)

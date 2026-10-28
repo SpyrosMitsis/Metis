@@ -27,7 +27,6 @@ import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import androidx.health.connect.client.records.Record
-import com.workoutmaker.app.data.adaptWeek
 
 /** A day's wellness snapshot read from Health Connect. All fields are optional. */
 data class HealthSnapshot(
@@ -324,7 +323,7 @@ class HealthConnectManager @Inject constructor(
         }
     }
 
-    // Names are chosen to satisfy the app's type matching (adaptWeek's
+    // Names are chosen to satisfy the app's type matching (activity reconciliation's
     // typeMatches, daily-summary's sportOf). Unknown types map to "Other",
     // NOT "Workout": "workout" substring-matches planned strength and would
     // auto-complete gym sessions from any unclassified activity.

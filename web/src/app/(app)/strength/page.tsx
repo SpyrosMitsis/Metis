@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createClient } from "@/lib/supabase-browser";
+import { createClient, currentUserId } from "@/lib/supabase-browser";
 import { api, localDateIso } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,18 +11,20 @@ import { Badge } from "@/components/ui/badge";
 import { WorkoutDetail } from "@/components/workout-detail";
 import { StrengthAnalysisSection } from "@/components/analysis-section";
 import { epley1rm, type PlannedWorkout, type Workout } from "@shared/types";
+import metadata from "@shared/exercise_metadata.json";
 import { ChevronRight, Dumbbell, Play, Plus, Sparkles, X } from "lucide-react";
 
-interface SetInput { reps: number; weight_kg: number; rpe?: number | null; is_warmup?: boolean }
+interface SetInput { quantity_unit?: string; reps: number; weight_kg: number; rpe?: number | null; is_warmup?: boolean }
 interface SessionExercise { name: string; muscle: string; sets: SetInput[] }
 
 // Full workout model — mirrors the Android cloud tables so sessions sync both ways.
 interface CloudWorkout {
   id: string; name: string; started_at: number; ended_at: number;
-  duration_sec: number; total_volume_kg: number; note: string;
+  duration_sec: number; total_volume_kg: number; note: string; planned_workout_id?: string | null;
 }
 interface CloudSet {
   id: string; workout_id: string; exercise_name: string; muscle: string;
+  quantity_unit?: string;
   idx: number; weight_kg: number; reps: number; rpe: number | null; is_warmup: boolean;
 }
 interface CloudRoutine { id: string; name: string; created_at: number }
@@ -89,7 +91,7 @@ export default function StrengthPage() {
     queryKey: ["today-planned-strength"],
     queryFn: async () => {
       const { data } = await supabase
-        .from("planned_workouts").select("*")
+        .from("reconciled_session_plans").select("*")
         .eq("date", todayIso()).eq("type", "strength")
         .order("created_at", { ascending: false });
       return (data ?? []) as PlannedWorkout[];
@@ -99,6 +101,7 @@ export default function StrengthPage() {
   const lib = exercises.data ?? [];
   const [session, setSession] = useState<SessionExercise[]>([]);
   const [sessionStart, setSessionStart] = useState<number | null>(null);
+  const [note, setNote] = useState("");
   const [name, setName] = useState("");
   const [picker, setPicker] = useState("");
   const [linkedPlannedId, setLinkedPlannedId] = useState<string | null>(null);
@@ -143,8 +146,8 @@ export default function StrengthPage() {
     if (!exName) return;
     const last = lastSetsByExercise.get(exName);
     const sets: SetInput[] = last?.length
-      ? last.slice(0, Math.max(targetSets, last.length)).map((s) => ({ reps: s.reps, weight_kg: s.weight_kg }))
-      : Array.from({ length: Math.max(1, targetSets) }, () => ({ reps: 8, weight_kg: 20 }));
+      ? last.slice(0, Math.max(targetSets, last.length)).map((s) => ({ reps: s.reps, weight_kg: s.weight_kg, quantity_unit: s.quantity_unit ?? "reps" }))
+      : Array.from({ length: Math.max(1, targetSets) }, () => ({ reps: 8, weight_kg: 0, quantity_unit: isCardioExercise(exName) ? "minutes" : metadata.find(m => m.name === exName)?.logging ?? "reps" }));
     setSession((s) => [...s, { name: exName, muscle: muscleOf(exName), sets }]);
     if (sessionStart === null) setSessionStart(Date.now());
     setPicker("");
@@ -162,8 +165,8 @@ export default function StrengthPage() {
           name: ex.name,
           muscle: cardio ? "cardio" : (ex.muscle?.toLowerCase() ?? muscleOf(ex.name)),
           sets: Array.from({ length: n }, () => cardio
-            ? { reps, weight_kg: 0 } // reps = minutes for cardio
-            : { reps, weight_kg: ex.weight_kg ?? lastSetsByExercise.get(ex.name)?.[0]?.weight_kg ?? 20 }),
+            ? { reps, weight_kg: 0, quantity_unit: "minutes" } // reps = minutes for cardio
+            : { reps, quantity_unit: /metres|meters/.test(ex.reps) ? "metres" : /sec/.test(ex.reps) ? "seconds" : "reps", weight_kg: ex.weight_kg ?? lastSetsByExercise.get(ex.name)?.[0]?.weight_kg ?? 0 }),
         });
       }
     }
@@ -188,11 +191,12 @@ export default function StrengthPage() {
     setSession([...grouped.entries()].map(([exName, list]) => ({
       name: exName,
       muscle: list[0]?.muscle ?? muscleOf(exName),
-      sets: list.map((s) => ({ reps: s.reps, weight_kg: s.weight_kg, rpe: s.rpe, is_warmup: s.is_warmup })),
+      sets: list.map((s) => ({ reps: s.reps, quantity_unit: s.quantity_unit ?? "reps", weight_kg: s.weight_kg, rpe: s.rpe, is_warmup: s.is_warmup })),
     })));
     setName(w.name);
+    setNote(w.note);
     setSessionStart(w.started_at);
-    setLinkedPlannedId(null);
+    setLinkedPlannedId(w.planned_workout_id ?? null);
     setEditing(w);
     setOpenSession(null);
     setBanner(`Editing “${w.name}”, adjust sets/reps and Save changes.`);
@@ -229,7 +233,7 @@ export default function StrengthPage() {
     for (const s of sets) { const arr = grouped.get(s.exercise_name) ?? []; arr.push(s); grouped.set(s.exercise_name, arr); }
     setSession([...grouped.entries()].map(([exName, list]) => ({
       name: exName, muscle: muscleOf(exName),
-      sets: list.map((s) => ({ reps: s.reps, weight_kg: s.weight_kg, is_warmup: s.is_warmup })),
+      sets: list.map((s) => ({ reps: s.reps, quantity_unit: s.quantity_unit ?? "reps", weight_kg: s.weight_kg, is_warmup: s.is_warmup })),
     })));
     setName(last.name);
     setSessionStart(Date.now());
@@ -264,10 +268,10 @@ export default function StrengthPage() {
   const removeSet = (ei: number, si: number) =>
     setSession((s) => s.map((ex, i) => i !== ei ? ex : { ...ex, sets: ex.sets.filter((_, j) => j !== si) }));
   const removeExercise = (ei: number) => setSession((s) => s.filter((_, i) => i !== ei));
-  const discard = () => { setSession([]); setSessionStart(null); setName(""); setLinkedPlannedId(null); setEditing(null); };
+  const discard = () => { setSession([]); setSessionStart(null); setName(""); setNote(""); setLinkedPlannedId(null); setEditing(null); };
 
   const sessionVolume = useMemo(
-    () => session.reduce((t, ex) => t + ex.sets.filter((s) => !s.is_warmup).reduce((a, s) => a + s.weight_kg * s.reps, 0), 0),
+    () => session.reduce((t, ex) => t + ex.sets.filter((s) => !s.is_warmup && (s.quantity_unit ?? "reps") === "reps" && !["band", "assistance"].includes(metadata.find(m => m.name === ex.name)?.load_mode ?? "")).reduce((a, s) => a + s.weight_kg * s.reps, 0), 0),
     [session],
   );
 
@@ -282,63 +286,23 @@ export default function StrengthPage() {
         ex.sets.forEach((s, i) => {
           setRows.push({
             id: crypto.randomUUID(), workout_id: id, exercise_name: ex.name, muscle: ex.muscle,
-            idx: i + 1, weight_kg: s.weight_kg, reps: s.reps, rpe: s.rpe ?? null, is_warmup: s.is_warmup ?? false,
+            idx: i + 1, quantity_unit: s.quantity_unit ?? "reps", weight_kg: s.weight_kg, reps: s.reps, rpe: s.rpe ?? null, is_warmup: s.is_warmup ?? false,
           });
         });
       }
-      // 1. Full workout model (syncs to the phone). Edits replace in place.
-      if (editing) {
-        const { error: we } = await supabase.from("strength_workouts").update({
-          name: name.trim() || "Workout", total_volume_kg: sessionVolume,
-        }).eq("id", id);
-        if (we) throw we;
-        const { error: de } = await supabase.from("strength_workout_sets").delete().eq("workout_id", id);
-        if (de) throw de;
-      } else {
-        const { error: we } = await supabase.from("strength_workouts").insert({
-          id, name: name.trim() || "Workout", started_at: start, ended_at: end,
-          duration_sec: Math.round((end - start) / 1000), total_volume_kg: sessionVolume, note: "",
-        });
-        if (we) throw we;
-      }
-      if (setRows.length) {
-        const { error: se } = await supabase.from("strength_workout_sets").insert(setRows);
-        if (se) throw se;
-      }
-      // 2. Per-exercise strength_logs so the AI generator sees volume / e1RM.
-      //    On edit, rebuild the whole date from the cloud workouts (otherwise
-      //    the old prescription's rows would survive alongside the new ones).
       const date = dayOf(start);
-      if (editing) {
-        await supabase.from("strength_logs").delete().eq("date", date);
-        const sameDay = (workouts.data?.workouts ?? []).filter((w) => w.id !== id && dayOf(w.started_at) === date);
-        for (const w of sameDay) {
-          const wSets = (workouts.data?.sets ?? []).filter((s) => s.workout_id === w.id && !s.is_warmup && s.reps > 0);
-          const byEx = new Map<string, CloudSet[]>();
-          for (const s of wSets) { const a = byEx.get(s.exercise_name) ?? []; a.push(s); byEx.set(s.exercise_name, a); }
-          for (const [exName, list] of byEx) {
-            await supabase.from("strength_logs").insert({
-              date, exercise_name: exName, muscle_groups: [list[0]?.muscle ?? muscleOf(exName)],
-              sets: list.map((s) => ({ reps: s.reps, weight_kg: s.weight_kg, rpe: s.rpe })),
-              estimated_1rm: Math.max(0, ...list.map((s) => epley1rm(s.weight_kg, s.reps))) || null,
-            });
-          }
-        }
-      }
-      for (const ex of session) {
-        const working = ex.sets.filter((s) => !s.is_warmup && s.reps > 0);
-        if (!working.length) continue;
-        const best1rm = Math.max(0, ...working.map((s) => epley1rm(s.weight_kg, s.reps)));
-        await supabase.from("strength_logs").insert({
-          date, exercise_name: ex.name, muscle_groups: [ex.muscle], sets: working, estimated_1rm: best1rm || null,
-        });
-      }
+      const owner = await currentUserId(supabase);
+      const { error: saveError } = await supabase.rpc("sync_strength", { p_owner: owner,
+        p_zone: Intl.DateTimeFormat().resolvedOptions().timeZone, p_workouts: [{ id, name: name.trim() || "Workout",
+          started_at: start, ended_at: end, duration_sec: Math.round((end - start) / 1000), total_volume_kg: sessionVolume,
+          note, planned_workout_id: linkedPlannedId || null, sets: setRows }], p_routines: [], p_custom: [], p_deletes: [] });
+      if (saveError) throw saveError;
       // 3. Auto-complete the linked plan so the calendar reflects it.
       if (linkedPlannedId) {
         await supabase.from("planned_workouts").update({ completed: true }).eq("id", linkedPlannedId);
       }
       // 4. Kick off the execution analysis in the background (same as the phone).
-      api.analyzeStrength(date, { force: true }).catch(() => null);
+      api.analyzeStrength(date, { force: true, workout_id: id }).catch(() => null);
       return { linked: !!linkedPlannedId, edited: !!editing };
     },
     onSuccess: ({ linked, edited }) => {
@@ -407,7 +371,7 @@ export default function StrengthPage() {
     for (const w of ws) {
       const exMap = new Map<string, number>();
       for (const s of setsByWorkout.get(w.id) ?? []) {
-        if (s.is_warmup || s.reps <= 0) continue;
+        if (s.is_warmup || s.reps <= 0 || (s.quantity_unit ?? "reps") !== "reps" || /band|assisted/i.test(s.exercise_name)) continue;
         exMap.set(s.exercise_name, Math.max(exMap.get(s.exercise_name) ?? 0, epley1rm(s.weight_kg, s.reps)));
       }
       for (const [exName, best] of exMap) {
@@ -452,7 +416,7 @@ export default function StrengthPage() {
 
         <Card>
           <CardContent className="p-4">
-            <StrengthAnalysisSection date={dayOf(openDetail.w.started_at)} />
+            <StrengthAnalysisSection date={dayOf(openDetail.w.started_at)} workoutId={openDetail.w.id} />
           </CardContent>
         </Card>
 
@@ -532,6 +496,7 @@ export default function StrengthPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <Input placeholder="Session name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
+          <Input placeholder="Session notes, including band and anchor setup" value={note} onChange={e => setNote(e.target.value)} />
 
           {session.map((ex, ei) => (
             <div key={ei} className="space-y-2 rounded-xl border border-border/60 p-3">
@@ -541,7 +506,7 @@ export default function StrengthPage() {
               </div>
               {lastSetsByExercise.get(ex.name) && (
                 <p className="text-[11px] text-muted-foreground">
-                  Last time: {lastSetsByExercise.get(ex.name)!.map((s) => `${s.weight_kg}×${s.reps}`).join(", ")}
+                  Last time: {lastSetsByExercise.get(ex.name)!.map((s) => `${s.weight_kg}×${s.reps} ${s.quantity_unit ?? "reps"}`).join(", ")}
                 </p>
               )}
               {ex.sets.map((s, si) => {
@@ -558,11 +523,14 @@ export default function StrengthPage() {
                     <>
                       <Input type="number" value={s.weight_kg} className="w-20"
                         onChange={(e) => patchSet(ei, si, { weight_kg: +e.target.value })} />
-                      <span className="text-xs text-muted-foreground">kg ×</span>
+                      <span className="text-xs text-muted-foreground">{metadata.find(m => m.name === ex.name)?.load_mode === "assistance" ? "assist kg ×" : "kg ×"}</span>
                       <Input type="number" value={s.reps} className="w-16"
                         onChange={(e) => patchSet(ei, si, { reps: +e.target.value })} />
                     </>
                   )}
+                  <select aria-label="Logging unit" value={s.quantity_unit ?? (cardio ? "minutes" : "reps")} onChange={e => patchSet(ei, si, { quantity_unit: e.target.value })} className="bg-background text-xs">
+                    {["reps", "seconds", "metres", "minutes"].map(unit => <option key={unit}>{unit}</option>)}
+                  </select>
                   <Input
                     type="number" placeholder="RPE" value={s.rpe ?? ""} className="w-16"
                     onChange={(e) => patchSet(ei, si, { rpe: e.target.value ? +e.target.value : null })}

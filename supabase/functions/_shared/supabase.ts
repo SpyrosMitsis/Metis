@@ -104,6 +104,10 @@ export const PROFILE_COLUMNS_GENERATION = [
   // Intervals.icu push + physiology (intervalsPhysiology, createEvent/deleteEvent).
   "intervals_athlete_id",
   "intervals_api_key_encrypted",
+  // Hosted entitlement must survive the narrowed projection passed to llmAccess.
+  "plan",
+  "plan_expires_at",
+  "use_hosted_ai",
   // Provider selection and BYO pricing (llmAccess, customPriceFromProfile).
   "active_llm_provider",
   "llm_fallback_chain",

@@ -1,14 +1,17 @@
+import { prescriptionEffortMinutes } from "./prescription.ts";
+import { EXERCISE_CATALOG as REQUIREMENT_CATALOG } from "./exercise_catalog.ts";
+import { requirements } from "./exercise_requirements.ts";
 // ============================================================================
 // Post-generation CONTENT review — the layer that makes the engine trustworthy.
 //
 // Zod (workout_schema.ts) validates the *shape*. This validates the
-// *prescription*: progressive-overload floor, load safety ceiling, weekly volume
+// *prescription*: progression upper bound, load safety ceiling, weekly volume
 // landmarks, 48h muscle recovery, endurance 80/20 / readiness, and an
 // independent TSS recompute (the model's self-reported TSS is unreliable and
 // feeds next-day ACWR, so we cross-check and replace it when it's way off).
 //
 // Pure + dependency-light so it's unit-testable without network or an LLM.
-// `reviewWorkout` auto-CORRECTS the safe, unambiguous things (load floor/ceiling,
+// `reviewWorkout` auto-CORRECTS the safe, unambiguous things (load ceilings,
 // bad TSS) and FLAGS the judgement calls (volume, recovery, readiness) as
 // violations the caller can feed into the self-repair retry.
 // ============================================================================
@@ -59,6 +62,8 @@ export interface ReviewContext {
   // The athlete's equipment tier (onboarding.equipment) — strength lifts whose
   // catalog category isn't available get stripped.
   equipment?: string;
+  implements?: string[];
+  maxMinutes?: number;
 }
 
 export type ViolationCode = "CATALOG_ENTRY" | "INJURY_CONTRAINDICATION" | "AVOID_SPORT" | "AVOID_MOVEMENT" | "EASE_INTENSITY" | "EASE_MOVEMENT" | "EQUIPMENT" | "PROGRESSION_TARGET" | "LOAD_FLOOR" | "LOAD_CEILING" | "ABSOLUTE_LOAD" | "MUSCLE_RECOVERY" | "WEEKLY_VOLUME" | "QUALITY_DURATION" | "MIXED_QUALITY" | "FATIGUE" | "HARD_SPACING" | "READINESS_CAP";
@@ -117,7 +122,7 @@ export function activeSafetyRules(injuries: InjuryEntry[]): ActiveSafetyRule[] {
   if (!injuries?.length) return [];
   const out: ActiveSafetyRule[] = [];
   for (const rule of SAFETY_RULES) {
-    const hit = injuries.find((i) => rule.when.test(i.area) || (i.note && rule.when.test(i.note)));
+    const hit = injuries.find((i) => i.status !== "resolved" && (rule.when.test(i.area) || (i.note && rule.when.test(i.note))));
     if (hit) out.push({ ...rule, severity: hit.severity });
   }
   return out;
@@ -145,7 +150,7 @@ function workingSets(ex: WorkoutExercise): number {
 // flat 22 for everyone, so a Beginner prescribed 20 sets broke the prompt and
 // passed the checker (formerly KNOWN_CONTRADICTIONS "weekly-sets"). Advanced
 // keeps 22 as a junk-volume landmark even though its tier is open-ended.
-function maxWeeklySets(experience: string): number {
+export function maxWeeklySets(experience: string): number {
   const e = (experience ?? "").toLowerCase();
   if (e.includes("beginner")) return 12;
   if (e.includes("advanced")) return 22;
@@ -221,6 +226,7 @@ const isEndurance = (t: Workout["type"]) => t === "run" || t === "ride" || t ===
 export function isHardSession(w: Workout): boolean {
   if (!isEndurance(w.type)) return false;
   if (w.rpe_target >= 7) return true;
+  if (w.prescription) return prescriptionEffortMinutes(w.prescription).some(b => zoneIsHard(b.zone));
   return w.sections.some((s) => s.exercises.some((ex) => zoneIsHard(zoneOf(ex))));
 }
 
@@ -229,6 +235,7 @@ export function computeTss(w: Workout): number {
   if (w.type === "rest") return 0;
 
   if (isEndurance(w.type)) {
+    if (w.prescription) return Math.round(prescriptionEffortMinutes(w.prescription).reduce((sum, b) => sum + b.mins * (ZONE_TSS_PER_MIN[b.zone] ?? 0), 0));
     let tss = 0;
     for (const sec of w.sections) {
       for (const ex of sec.exercises) {
@@ -355,6 +362,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
       const loaded = corrected.sections
         .flatMap((s) => s.exercises)
         .filter((ex) => exerciseLoadsArea(b.area, ex.name, muscleOf(ex)))
+        .filter((ex) => !corrected.prescription || corrected.prescription.blocks.some(block => block.kind === "strength" && block.name === ex.name && block.target.max > EASE_RPE_CAP))
         .map((ex) => ex.name);
       if (loaded.length) {
         issue("EASE_MOVEMENT", 
@@ -370,7 +378,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
   // only when the equipment tier is recognised (else fail open). Flagged too, so
   // the caller's repair pass regenerates an equipment-appropriate session.
   const allowed = allowedCategories(ctx.equipment);
-  if (allowed && w.type === "strength") {
+  if (allowed && !ctx.implements && w.type === "strength") {
     for (const sec of corrected.sections) {
       sec.exercises = sec.exercises.filter((ex) => {
         const cat = categoryOfExercise(ex.name);
@@ -384,6 +392,16 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     corrected.sections = corrected.sections.filter((s) => s.exercises.length > 0);
   }
 
+  if (ctx.implements && w.type === "strength") {
+    for (const sec of corrected.sections) sec.exercises = sec.exercises.filter(ex => {
+      const entry = REQUIREMENT_CATALOG.find(e => e.name === ex.name);
+      const missing = entry ? requirements(entry).implements.filter(i => !ctx.implements!.includes(i)) : [];
+      if (missing.length) issue("EQUIPMENT", `${ex.name}: missing ${missing.join(", ")}`);
+      return missing.length === 0;
+    });
+    corrected.sections = corrected.sections.filter(s => s.exercises.length);
+  }
+
   if (w.type === "strength") {
     const liftByName = new Map(ctx.mainLifts.map((l) => [norm(l.exercise), l]));
     const prescribedSetsByMuscle: Record<string, number> = {};
@@ -393,37 +411,19 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
       for (const ex of sec.exercises) {
         const lift = liftByName.get(norm(ex.name));
 
-        // Progression-engine SNAP: a logged lift's working prescription is the
-        // app's double-progression target, verbatim — the athlete sees one
-        // number in the plan and the logger. Skipped for warm-up sections and
-        // muscles in 48h recovery (deliberate back-off stays allowed there).
+        // A progression target is an upper bound, not a mandatory minimum.
+        // Lighter work is valid for familiarization, recovery and reduced-load
+        // weeks. Never copy a target between exercises or force reps upward.
         if (lift?.target && !warm && typeof ex.weight_kg === "number" &&
-            !ctx.muscleGroupsLast48h.includes(muscleOf(ex))) {
-          const t = lift.target;
-          const repsNum = Number((ex.reps ?? "").match(/\d+/)?.[0] ?? NaN);
-          if (Math.abs(ex.weight_kg - t.weightKg) > 1e-6 || repsNum !== t.reps) {
-            issue("PROGRESSION_TARGET", 
-              `${ex.name}: prescribed ${ex.weight_kg}kg×${ex.reps} ≠ progression target ${t.weightKg}kg×${t.reps}, snapped to the engine target`,
-            );
-            ex.weight_kg = t.weightKg;
-            ex.reps = String(t.reps);
-          }
-        }
-
-        // Progressive-overload FLOOR: never program below the athlete's last top
-        // set (unless that muscle is in 48h recovery — handled separately).
-        if (lift && typeof ex.weight_kg === "number" && lift.lastWeight > 0 &&
-            ex.weight_kg < lift.lastWeight - 1e-6 &&
-            !ctx.muscleGroupsLast48h.includes(muscleOf(ex))) {
-          issue("LOAD_FLOOR", 
-            `${ex.name}: prescribed ${ex.weight_kg}kg is below last top set ${lift.lastWeight}kg, raised to ${lift.lastWeight}kg`,
-          );
-          ex.weight_kg = lift.lastWeight;
+            ex.weight_kg > lift.target.weightKg) {
+          issue("PROGRESSION_TARGET",
+            `${ex.name}: load exceeds the exercise's progression target; capped at ${lift.target.weightKg}kg`);
+          ex.weight_kg = lift.target.weightKg;
         }
 
         // Safety CEILING: clamp implausible loads.
         if (typeof ex.weight_kg === "number") {
-          if (lift && lift.estimated1rm > 0 && ex.weight_kg > lift.estimated1rm * 1.5) {
+          if (lift && !/assisted/i.test(ex.name) && categoryOfExercise(ex.name) !== "Band" && lift.estimated1rm > 0 && ex.weight_kg > lift.estimated1rm * 1.5) {
             const cap = Math.round(lift.estimated1rm * 1.5);
             issue("LOAD_CEILING", `${ex.name}: ${ex.weight_kg}kg exceeds 1.5× est 1RM, clamped to ${cap}kg`);
             ex.weight_kg = cap;
@@ -475,6 +475,11 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
         if (z === "Z3" || z === "Z4") tempoMins += per;
         else if (z === "Z5") vo2Mins += per;
       }
+    }
+    if (corrected.prescription) {
+      const pieces = prescriptionEffortMinutes(corrected.prescription);
+      tempoMins = pieces.filter(p => p.zone === "Z3" || p.zone === "Z4").reduce((sum, p) => sum + p.mins, 0);
+      vo2Mins = pieces.filter(p => p.zone === "Z5").reduce((sum, p) => sum + p.mins, 0);
     }
     const hardMins = tempoMins + vo2Mins;
     if (hardMins > 40) {

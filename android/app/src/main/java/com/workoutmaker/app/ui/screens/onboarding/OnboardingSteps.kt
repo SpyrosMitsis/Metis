@@ -407,7 +407,7 @@ internal fun StepEffort(profile: TrainingProfile, vm: OnboardingViewModel) {
             // show what THAT choice does over the weeks — one story, in order.
             PeriodizationControl(
                 periodized = profile.periodized,
-                onChange = { p -> vm.update { it.copy(periodized = p) } },
+                onChange = { p -> vm.update { Periodization.configure(it, p) } },
                 weeklyTssTarget = profile.weekly_tss_target,
             )
             PeriodizationNumbers(profile.weekly_tss_target, profile.periodized)

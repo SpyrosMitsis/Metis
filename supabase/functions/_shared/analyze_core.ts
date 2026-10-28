@@ -1,3 +1,5 @@
+import { movementEquivalent } from "./exercise_requirements.ts";
+import { executionEvidence, strengthDoseEvidence } from "./execution_evidence.ts";
 // ============================================================================
 // Post-workout analysis orchestration — shared by analyze-activity (on-demand,
 // from the app) and sync-intervals (automatic, right after new activities
@@ -70,7 +72,7 @@ export async function runActivityAnalysis(
   const onboarding = profile?.onboarding ?? {};
 
   const { data: plannedRow } = act.planned_workout_id
-    ? await admin.from("planned_workouts").select("id,type,workout_json")
+    ? await admin.from("reconciled_session_plans").select("id,type,workout_json")
       .eq("user_id", userId).eq("id", act.planned_workout_id).maybeSingle()
     : { data: null };
   const planned = (plannedRow?.workout_json ?? null) as Workout | null;
@@ -182,7 +184,12 @@ export async function runActivityAnalysis(
     });
   }
 
-  const score = planned ? combineScore(components) : null;
+  const execution = planned ? executionEvidence(planned, { type: String(act.type ?? ""),
+    duration_seconds: act.duration_seconds ?? null, effort: act.data_json?.icu_rpe ?? null, athlete_state: act.session_state }) : null;
+  if (planned?.prescription || execution && !execution.sport_compatible) components.length = 0;
+  // A structured interval prescription cannot be graded from whole-session
+  // duration alone. Cross-sport substitutions are never adherence scores.
+  const score = planned && !planned.prescription && execution?.sport_compatible ? combineScore(components) : null;
   const label = score != null ? scoreLabel(score) : (planned ? "Not enough data" : "No plan that day");
 
   // --- AI coach feedback ------------------------------------------------------
@@ -245,6 +252,7 @@ export async function runActivityAnalysis(
         : `There was NO plan for this day, so do NOT grade it against one or speculate about what "should" have been planned. Assess the session on its own merits: what it trained physiologically, how well it was paced (use the split and drift numbers), and ONE concrete cue for next time.`;
       const prompt = `Review this completed ${swim ? "swim" : act.type ?? ""} session.
 
+${execution ? `EXECUTION EVIDENCE: ${execution.summary}` : ""}
 ${planned ? `PLANNED: ${planned.title}, ${planned.type}, ~${planned.duration_minutes} min, ~${planned.tss_estimate} TSS.${zoneText ? ` Target intensity ${zoneText}.` : ""} Structure: ${(planned.sections ?? []).map((s) => s.name).join(" → ")}` : "PLANNED: nothing, this was an unplanned session."}
 ACTUAL: ${actualBits || "no summary data"}.${targetText}
 ${splitText ? `SPLITS (✓ = in the target band, ✗ = out): ${splitText}.` : ""}
@@ -293,6 +301,7 @@ Write 3-5 sentences of coach feedback. Every sentence must reference a concrete 
       }
       : null,
     splits,
+    execution_evidence: execution,
     planned_title: planned?.title ?? null,
     // Unit metadata so the client renders swim paces /100m and 100 m splits.
     pace_unit: paceUnit,
@@ -334,6 +343,8 @@ export interface CoverageItem {
 }
 export interface CoverageResult {
   done: number;
+  exactDone: number;
+  movementDone: number;
   total: number;
   substitutions: { logged: string; planned: string }[];
   skipped: string[];
@@ -373,10 +384,12 @@ export function matchCoverage(
   });
 
   const skipped = planned.filter((_, pi) => !coveredBy[pi]).map((pe) => pe.name);
-  return { done: planned.length - skipped.length, total: planned.length, substitutions, skipped, coveredBy };
+  const exactDone = planned.filter((pe, i) => coveredBy[i] && namesMatch(pe.name, coveredBy[i]!)).length;
+  const movementDone = planned.filter((pe, i) => coveredBy[i] && movementEquivalent(pe.name, coveredBy[i]!)).length;
+  return { done: planned.length - skipped.length, exactDone, movementDone, total: planned.length, substitutions, skipped, coveredBy };
 }
 
-interface LoggedSet { reps?: number; weight_kg?: number; rpe?: number }
+interface LoggedSet { reps?: number; weight_kg?: number; rpe?: number; is_warmup?: boolean; quantity_unit?: string }
 
 // Fetch just the heartrate stream of a watch recording and build a downsampled
 // series for the chart. Cheap (no LLM) and best-effort — returns null when there
@@ -427,25 +440,44 @@ export async function runStrengthAnalysis(
   admin: SupabaseClient,
   userId: string,
   date: string,
+  workoutId?: string,
 ): Promise<Row> {
-  const [{ data: profile }, { data: plans }, { data: logs }, { data: watchActs }] = await Promise.all([
+  let [{ data: profile }, { data: plans }, { data: logs }, { data: watchActs }] = await Promise.all([
     admin.from("user_profiles").select("*").eq("id", userId).single(),
-    admin.from("planned_workouts").select("type, workout_json")
+    admin.from("reconciled_session_plans").select("type, workout_json")
       .eq("user_id", userId).eq("date", date).eq("type", "strength"),
-    admin.from("strength_logs").select("exercise_name, sets, estimated_1rm, muscle_groups")
+    admin.from("strength_logs").select("exercise_name, sets, estimated_1rm, muscle_groups, workout_id")
       .eq("user_id", userId).eq("date", date),
-    admin.from("effective_activities").select("intervals_id, type, duration_seconds, avg_hr, tss, data_json")
+    admin.from("effective_activities").select("intervals_id, type, duration_seconds, avg_hr, tss, data_json, started_at, ended_at, planned_workout_id")
       .eq("user_id", userId).eq("date", date),
   ]);
 
+  const explicitSession = !!workoutId;
+  const sessionIds = [...new Set((logs ?? []).map(l => l.workout_id).filter(Boolean))];
+  if (!workoutId && sessionIds.length === 1 && (logs ?? []).every(l => l.workout_id)) workoutId = sessionIds[0];
+  let sourceSession: Row | null = null;
+  if (workoutId) {
+    const { data: source, error } = await admin.from("strength_workouts").select("id,started_at,ended_at,planned_workout_id").eq("user_id", userId).eq("id", workoutId).maybeSingle();
+    if (error || !source) throw new Error("Strength session not found for this athlete");
+    sourceSession = source;
+    const { data: sourceSets, error: setsError } = await admin.from("strength_workout_sets").select("exercise_name,muscle,reps,weight_kg,rpe,is_warmup,quantity_unit,idx").eq("user_id", userId).eq("workout_id", workoutId).order("idx");
+    if (setsError) throw new Error("Cannot read session quantities");
+    const grouped = new Map<string, Row[]>();
+    for (const set of sourceSets ?? []) if (!set.is_warmup) grouped.set(set.exercise_name, [...(grouped.get(set.exercise_name) ?? []), set]);
+    logs = [...grouped].map(([name, sets]) => ({ exercise_name: name, sets, estimated_1rm: null, workout_id: workoutId, muscle_groups: [...new Set(sets.map(s => s.muscle))] }));
+    if (source.planned_workout_id) {
+      const { data: linked } = await admin.from("reconciled_session_plans").select("id,type,workout_json").eq("user_id", userId).eq("id", source.planned_workout_id);
+      plans = linked ?? [];
+    } else plans = [];
+  } else plans = []; // A date aggregate never proves which plan was executed.
   const logged = logs ?? [];
   if (!logged.length) {
     throw new Error("no logged strength session on this date, sync the session first");
   }
   const planned = ((plans ?? [])[0]?.workout_json ?? null) as Workout | null;
-  const watch = (watchActs ?? []).find((a) =>
-    activityMatchesPlanned("strength", a.type)
-  ) ?? null;
+  const watchCandidates = sourceSession ? (watchActs ?? []).filter(a => activityMatchesPlanned("strength", a.type) &&
+    a.started_at && Math.abs(Date.parse(a.started_at) - Number(sourceSession!.started_at)) <= 30 * 60000) : [];
+  const watch = watchCandidates.length === 1 ? watchCandidates[0] : null;
 
   // --- HR trace from the paired watch recording (for the chart) -------------
   // Strength sessions have no pace/distance, but the watch still records HR.
@@ -453,8 +485,8 @@ export async function runStrengthAnalysis(
 
   // --- per-exercise actuals ---------------------------------------------------
   const exercises = logged.map((l) => {
-    const sets = (Array.isArray(l.sets) ? l.sets : []) as LoggedSet[];
-    const volume = sets.reduce((s, x) => s + (x.weight_kg ?? 0) * (x.reps ?? 0), 0);
+    const sets = ((Array.isArray(l.sets) ? l.sets : []) as LoggedSet[]).filter(s => !s.is_warmup);
+    const volume = sets.filter(x => (!x.quantity_unit || x.quantity_unit === "reps") && !/band|assisted/i.test(l.exercise_name)).reduce((s, x) => s + (x.weight_kg ?? 0) * (x.reps ?? 0), 0);
     const top = sets.reduce((m, x) => Math.max(m, x.weight_kg ?? 0), 0);
     const mg = Array.isArray(l.muscle_groups) ? (l.muscle_groups as string[]) : [];
     return {
@@ -480,10 +512,11 @@ export async function runStrengthAnalysis(
   }[] = [];
   // Accepted same-muscle swaps (planned ← logged), for the coach prompt below.
   let substitutions: { logged: string; planned: string }[] = [];
+  let coverageEvidence: { exact: number; movement: number; muscle: number; total: number } | null = null;
   if (planned) {
     // Custom exercises let us resolve muscles for names outside the catalog.
     const custom = await customExercises(admin, userId).catch(() => []);
-    plannedExercises = (planned.sections ?? []).flatMap((s) =>
+    plannedExercises = (planned.sections ?? []).filter(s => !/warm|cool|mobility|activation/i.test(s.name)).flatMap((s) =>
       (s.exercises ?? []).filter((e) => (e.sets ?? 0) > 0).map((e) => {
         const explicit = (e as { muscle?: string | null }).muscle;
         return {
@@ -501,6 +534,7 @@ export async function runStrengthAnalysis(
       for (const ex of exercises) if (!ex.muscle) ex.muscle = muscleForName(ex.name, custom);
       const cov = matchCoverage(plannedExercises, exercises.map((ex) => ({ name: ex.name, muscle: ex.muscle })));
       substitutions = cov.substitutions;
+      coverageEvidence = { exact: cov.exactDone, movement: cov.movementDone, muscle: cov.done, total: cov.total };
 
       // Only compare prescribed load for the same exercise. A machine/dumbbell
       // substitution cannot inherit another exercise's target kilograms.
@@ -599,6 +633,9 @@ Write 3-5 sentences of specific coach feedback: completion vs the plan, load sel
   const analysis = {
     ok: true,
     kind: "strength",
+    workout_id: workoutId ?? null, scope: workoutId ? "session" : "date_aggregate",
+    coverage_evidence: coverageEvidence,
+    dose_evidence: strengthDoseEvidence(plannedExercises, logged.map(l => ({ exercise_name: l.exercise_name, sets: Array.isArray(l.sets) ? l.sets : [] }))),
     score,
     label,
     components,
@@ -619,10 +656,10 @@ Write 3-5 sentences of specific coach feedback: completion vs the plan, load sel
     generated_at: new Date().toISOString(),
   };
 
-  await admin.from("strength_analyses").upsert(
-    { user_id: userId, date, analysis_json: analysis },
-    { onConflict: "user_id,date" },
-  );
+  if (workoutId) await admin.from("strength_session_analyses").upsert(
+    { user_id: userId, workout_id: workoutId, planned_workout_id: sourceSession?.planned_workout_id ?? null, analysis_json: analysis }, { onConflict: "user_id,workout_id" });
+  if (!explicitSession) await admin.from("strength_analyses").upsert(
+    { user_id: userId, date, analysis_json: analysis }, { onConflict: "user_id,date" });
 
   return analysis;
 }
@@ -663,7 +700,7 @@ export async function autoAnalyzeRecent(admin: SupabaseClient, userId: string): 
         // Only auto-analyze when a plan existed that day — without one there is
         // no execution score, and the user can still analyze manually.
         const { data: plans } = await admin
-          .from("planned_workouts")
+          .from("reconciled_session_plans")
           .select("id")
           .eq("user_id", userId)
           .eq("date", act.date)
@@ -691,7 +728,7 @@ export async function autoAnalyzeRecent(admin: SupabaseClient, userId: string): 
     for (const date of dates) {
       if (done >= 2) break;
       const { data: plans } = await admin
-        .from("planned_workouts")
+        .from("reconciled_session_plans")
         .select("id")
         .eq("user_id", userId)
         .eq("date", date)

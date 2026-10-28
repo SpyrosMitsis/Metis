@@ -330,7 +330,7 @@ Deno.test("goalRaceLine: nothing to say renders nothing, so callers can append i
 });
 
 import { adherenceBlock } from "./context.ts";
-Deno.test("adherence uses one-to-one sport matching, explicit status and bounded actual load", async () => {
+Deno.test("adherence abstains on unlinked same-day activities and keeps actual load", async () => {
   const plans = [
     { date: "2026-10-20", type: "run", workout_json: { tss_estimate: 20 } },
     { date: "2026-10-20", type: "run", workout_json: { tss_estimate: 20 } },
@@ -348,9 +348,9 @@ Deno.test("adherence uses one-to-one sport matching, explicit status and bounded
     { date: "2026-10-21", type: "Run", tss: 999 },
     { date: "2026-10-07", type: "Run", tss: 999 },
   ]);
-  assertStringIncludes(result, "1/5 explicitly completed; 1 additional same-sport");
-  assertStringIncludes(result, "2 other recorded activities");
+  assertStringIncludes(result, "1/5 explicitly completed; 0 additional same-sport");
+  assertStringIncludes(result, "3 other recorded activities");
   assertStringIncludes(result, "Explicitly skipped: 2026-10-18 ride");
-  assertStringIncludes(result, "No matching recording: 2026-10-20 run; 2026-10-17 run");
+  assertStringIncludes(result, "No matching recording: 2026-10-20 run; 2026-10-20 run; 2026-10-17 run");
   assertStringIncludes(result, "~50% of planned load");
 });

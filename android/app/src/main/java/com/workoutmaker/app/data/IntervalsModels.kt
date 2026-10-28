@@ -25,6 +25,7 @@ data class IntervalsActivity(
     val duration_min: Int? = null,
     val tss: Double? = null,
     val avg_hr: Int? = null,
+    val intervals_id: String? = null,
 )
 
 @Serializable

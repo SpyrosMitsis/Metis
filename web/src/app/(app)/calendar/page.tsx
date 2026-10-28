@@ -1,6 +1,10 @@
 "use client";
+import { AdaptationControls } from "@/components/adaptation-controls";
+import { SessionFeedbackPanel } from "@/components/session-feedback-panel";
 
 import { useMemo, useState } from "react";
+import { WorkoutChoice } from "@/components/workout-choice";
+import { workoutChoiceRequest, type WorkoutSportChoice } from "@shared/workout_choices";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase-browser";
@@ -11,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { WorkoutDetail } from "@/components/workout-detail";
 import { ActivityDetailCard } from "@/components/activity-detail";
 import type { CompletedActivity, PlannedWorkout, Workout } from "@shared/types";
-import { activityMeta, displayName, looksLike } from "@/lib/activity";
+import { activityMeta, displayName } from "@/lib/activity";
 import { cn } from "@/lib/utils";
 import {
   CalendarRange, Check, ChevronRight, Dumbbell, Lock, LockOpen, Plus,
@@ -72,6 +76,8 @@ export default function CalendarPage() {
   const [selected, setSelected] = useState<string | null>(todayIso);
   const [selectedActivity, setSelectedActivity] = useState<CompletedActivity | null>(null);
   const [request, setRequest] = useState("");
+  const [requestSport, setRequestSport] = useState<WorkoutSportChoice>("auto");
+  const [requestFocus, setRequestFocus] = useState("");
   const [lockRequest, setLockRequest] = useState(true);
   const [banner, setBanner] = useState<string | null>(null);
   const [moveFor, setMoveFor] = useState<string | null>(null); // planned id being moved
@@ -90,7 +96,7 @@ export default function CalendarPage() {
     queryKey: ["planned", monthStart],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("planned_workouts").select("*")
+        .from("reconciled_session_plans").select("*")
         .gte("date", monthStart).lte("date", monthEnd)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -118,8 +124,8 @@ export default function CalendarPage() {
   const fail = (e: unknown) => setBanner((e as Error).message);
 
   const generate = useMutation({
-    mutationFn: (vars: { date: string; request?: string; lock?: boolean }) =>
-      api.generateWorkout({ date: vars.date, type: "auto", request: vars.request, lock: vars.lock }),
+    mutationFn: (vars: { date: string; request?: string; lock?: boolean; type?: WorkoutSportChoice }) =>
+      api.generateWorkout({ date: vars.date, type: vars.type ?? "auto", request: vars.request, lock: vars.lock }),
     onSuccess: () => { setRequest(""); setBanner(null); invalidate(); },
     onError: fail,
   });
@@ -157,19 +163,7 @@ export default function CalendarPage() {
   // Done/skip parity with Android: flips the flag + logs workout_feedback.
   const markComplete = useMutation({
     mutationFn: async (vars: { w: PlannedWorkout; completed: boolean }) => {
-      const { error } = await supabase.from("planned_workouts")
-        .update({ completed: vars.completed, skipped: !vars.completed }).eq("id", vars.w.id);
-      // Pre-migration-26 fallback: no `skipped` column yet.
-      if (error) {
-        const { error: e2 } = await supabase.from("planned_workouts")
-          .update({ completed: vars.completed }).eq("id", vars.w.id);
-        if (e2) throw e2;
-      }
-      const { error: fbErr } = await supabase.from("workout_feedback").insert({
-        planned_workout_id: vars.w.id, date: vars.w.date,
-        completed: vars.completed, difficulty: vars.completed ? "just_right" : null,
-      });
-      if (fbErr) throw fbErr;
+      await api.sessionFeedback({id:crypto.randomUUID(),planned_workout_id:vars.w.id,date:vars.w.date,completed:vars.completed,outcome:vars.completed?"as_planned":"skipped"});
     },
     onSuccess: (_d, vars) => setBannerAndReload(vars.completed ? "✓ Marked done" : "Marked skipped"),
     onError: fail,
@@ -177,15 +171,7 @@ export default function CalendarPage() {
 
   const markUndone = useMutation({
     mutationFn: async (w: PlannedWorkout) => {
-      const { error } = await supabase.from("planned_workouts")
-        .update({ completed: false, skipped: false }).eq("id", w.id);
-      // Pre-migration-26 fallback: no `skipped` column yet.
-      if (error) {
-        const { error: e2 } = await supabase.from("planned_workouts").update({ completed: false }).eq("id", w.id);
-        if (e2) throw e2;
-      }
-      // Drop any skip feedback so the planner doesn't count it against you.
-      await supabase.from("workout_feedback").delete().eq("planned_workout_id", w.id).eq("completed", false);
+      const {error}=await supabase.rpc("undo_session_feedback",{p_plan:w.id});if(error)throw error;
     },
     onSuccess: () => setBannerAndReload("Marked as not done"),
     onError: fail,
@@ -202,6 +188,8 @@ export default function CalendarPage() {
       const tss = (vars.durationMin * (vars.rpe ?? 5)) / 6.0;
       const { error } = await supabase.from("completed_activities").insert({
         intervals_id: `manual:${crypto.randomUUID()}`,
+        source: "manual", source_id: crypto.randomUUID(), timezone_provenance: "user_local_date",
+        measurement_provenance: { duration_seconds: "user_reported", distance_m: "user_reported", tss: "estimated" },
         type: vars.type, date: vars.date,
         duration_seconds: vars.durationMin * 60,
         distance_m: vars.distanceKm != null ? vars.distanceKm * 1000 : null,
@@ -239,31 +227,6 @@ export default function CalendarPage() {
 
   // Adaptive re-plan: sync fresh actuals, reconcile this week's plan against
   // what was actually done, then re-plan from today around it.
-  const adapt = useMutation({
-    mutationFn: async () => {
-      await api.syncIntervals().catch(() => {}); // best-effort fresh actuals
-      const td = todayIso();
-      const ws = mondayOf(td);
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth.user) throw new Error("Sign in again");
-      const { error } = await supabase.rpc("reconcile_sessions", { p_owner: auth.user.id });
-      if (error) throw error;
-      const { data: pw } = await supabase.from("reconciled_plans").select("*").gte("date",ws).lte("date",td);
-      const reconciled = (pw ?? []).filter(p => p.activity_ids?.length).length;
-      const missed = (pw ?? []).filter(p => p.skipped).length;
-      await api.planWeek(td);
-      return { reconciled, missed };
-    },
-    onSuccess: ({ reconciled, missed }) => {
-      const parts = [];
-      if (reconciled) parts.push(`matched ${reconciled} to what you did`);
-      if (missed) parts.push(`${missed} skipped`);
-      parts.push("re-planned the rest of your week");
-      setBanner(`✓ ${parts.join(" · ")}.`);
-      invalidate();
-    },
-    onError: fail,
-  });
 
   // Open a planned strength session in the Strength logger, pre-filled and
   // linked so finishing it marks this plan complete (web handoff = sessionStorage).
@@ -301,7 +264,7 @@ export default function CalendarPage() {
   }, [planned.data]);
 
   const planning = planWeek.isPending;
-  const busy = planning || adapt.isPending || sync.isPending;
+  const busy = planning || sync.isPending;
 
   return (
     <div className="space-y-4 pb-4">
@@ -318,22 +281,7 @@ export default function CalendarPage() {
 
       {banner && <p className="text-sm text-primary">{banner}</p>}
 
-      {/* Adaptive re-plan prompt */}
-      {divergence && (
-        <Card className="border-sand/40">
-          <CardContent className="space-y-3 p-4">
-            <p className="label-caps" style={{ color: "hsl(var(--sand))" }}>Plan vs reality</p>
-            <p className="text-sm text-muted-foreground">
-              You have planned sessions this week you haven&apos;t done yet. I can pull what you actually did from
-              Intervals.icu and rebuild the rest of your week around it.
-            </p>
-            <Button disabled={busy} onClick={() => adapt.mutate()}>
-              <Sparkles className="h-4 w-4" />
-              {adapt.isPending ? "Adapting…" : "Adapt my plan to what I did"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+      <AdaptationControls onChange={invalidate} />
 
       {/* AI planning actions */}
       <Button className="w-full" variant="outline" disabled={busy} onClick={() => planWeek.mutate(selected ?? monthStart)}>
@@ -385,7 +333,10 @@ export default function CalendarPage() {
         selectedActivity ? (
           <ActivityDetailCard
             activity={selectedActivity}
-            planned={primaryFirst(byDate.get(selectedActivity.date ?? "") ?? [])[0] ?? null}
+            planned={(planned.data ?? []).find(w => w.id === selectedActivity.planned_workout_id) ?? null}
+            plans={(planned.data ?? []).filter(w => w.date === selectedActivity.date)}
+            activities={selectedActs}
+            onCorrect={invalidate}
             onBack={() => setSelectedActivity(null)}
           />
         ) : (
@@ -456,6 +407,8 @@ export default function CalendarPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <h3 className="text-lg font-semibold">{w.workout_json.title}</h3>
+                  <SessionFeedbackPanel date={w.date} planId={w.id} onChange={invalidate} />
+                  <p className="text-xs text-muted-foreground">Session {(w.session_slot ?? 0) + 1}{w.start_minute != null ? ` · ${String(Math.floor(w.start_minute / 60)).padStart(2, "0")}:${String(w.start_minute % 60).padStart(2, "0")}` : ""}{w.combined_group ? " · combined multisport session" : ""}</p>
                   <WorkoutDetail workout={w.workout_json} />
 
                   {moveFor === w.id && (
@@ -487,7 +440,7 @@ export default function CalendarPage() {
                       </div>
                     ) : w.skipped ? (
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-muted-foreground">Skipped, the plan will adapt.</p>
+                        <p className="text-sm text-muted-foreground">Skipped. Preview an adjustment when you want one.</p>
                         <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => markUndone.mutate(w)}>
                           Undo skip
                         </button>
@@ -525,6 +478,7 @@ export default function CalendarPage() {
             {/* Ask AI for a specific fixed session (locked by default). */}
             <div className="space-y-2 rounded-xl bg-background/60 p-3">
               <p className="label-caps">Ask AI for a session</p>
+              <WorkoutChoice sport={requestSport} focus={requestFocus} onSport={setRequestSport} onFocus={setRequestFocus} disabled={generate.isPending} />
               <textarea
                 className="min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 placeholder="e.g. Friday social 10k run with friends, easy pace"
@@ -537,8 +491,8 @@ export default function CalendarPage() {
               </label>
               <Button
                 size="sm"
-                disabled={!request.trim() || generate.isPending}
-                onClick={() => generate.mutate({ date: selected, request: request.trim(), lock: lockRequest })}
+                disabled={(!request.trim() && requestSport === "auto") || generate.isPending}
+                onClick={() => generate.mutate({ date: selected, type: requestSport, request: workoutChoiceRequest(requestSport, requestFocus, request), lock: lockRequest })}
               >
                 <Wand2 className="h-4 w-4" />
                 {generate.isPending && request ? "Creating…" : "Create session"}

@@ -18,6 +18,13 @@ const E = (name: string, muscle: string, category: string, compound = false): Ca
   ({ name, muscle, category, compound });
 
 export const EXERCISE_CATALOG: CatalogExercise[] = [
+  E("Wall Push-Up", "Chest", "Bodyweight", true),
+  E("Resistance Band Row", "Back", "Band", true),
+  E("Resistance Band Chest Press", "Chest", "Band", true),
+  E("Resistance Band Pull-Apart", "Shoulders", "Band", false),
+  E("Resistance Band Bicep Curl", "Biceps", "Band", false),
+  E("Resistance Band Lateral Raise", "Shoulders", "Band", false),
+
   // Additional home and gym variations (mirrored on server and Android).
   E("Incline Push-Up", "Chest", "Bodyweight", true),
   E("Dumbbell Floor Press", "Chest", "Dumbbell", true),
@@ -159,7 +166,7 @@ export const MUSCLES = [
 ];
 
 export const CATEGORIES = [
-  "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio",
+  "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Band", "Cardio",
 ];
 
 const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -169,8 +176,9 @@ const catalogByNorm = new Map(EXERCISE_CATALOG.map((e) => [normName(e.name), e])
 // CATEGORIES they can actually train with. Returns null for an unknown/blank
 // value → callers then DON'T filter (fail open). Equipment tiers are inclusive.
 const EQUIPMENT_CATEGORIES: Record<string, string[]> = {
+  "resistance bands": ["Bodyweight", "Band"],
   "bodyweight": ["Bodyweight"],
-  "dumbbells": ["Bodyweight", "Dumbbell", "Kettlebell"],
+  "dumbbells": ["Bodyweight", "Dumbbell"],
   "barbell + rack": ["Bodyweight", "Dumbbell", "Kettlebell", "Barbell"],
   "full gym": ["Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio"],
 };

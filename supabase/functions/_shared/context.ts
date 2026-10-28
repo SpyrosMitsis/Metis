@@ -16,7 +16,7 @@ import {
   runHrZones,
   runPaceZones,
 } from "./intervals.ts";
-import { assessViability, getWeather } from "./weather.ts";
+import { assessViability, getWeather, type WeatherSnapshot } from "./weather.ts";
 import { paceToSec, paceZonesFromThreshold } from "./zones.ts";
 
 export type HrZone = { zone: string; min: number; max: number };
@@ -300,7 +300,7 @@ export async function adherenceBlock(
   acts28: ActivityRow[],
 ): Promise<string> {
   const { data: plannedRecent } = await admin
-    .from("reconciled_plans")
+    .from("reconciled_session_plans")
     .select("id, date, type, workout_json, completed, skipped, reconciliation_status")
     .eq("user_id", userId)
     .gte("date", since14)
@@ -327,7 +327,7 @@ export async function adherenceBlock(
     }
     const index = actual.findIndex((a, i) => !consumed.has(i) && a.planned_workout_id === p.id && p.id != null);
     if (index >= 0) consumed.add(index);
-    if (p.completed || p.reconciliation_status === "completed_as_planned") done++;
+    if (p.completed || ["completed_as_planned", "modified", "substituted"].includes(p.reconciliation_status)) done++;
     else if (index >= 0) matched++;
     else unmatched.push(`${p.date} ${p.type}`);
   }
@@ -551,8 +551,8 @@ export function calendarBlock(raw: unknown): string {
     `\nPut the long/hard sessions on days with the most free time; on tight days keep the session short, and treat an all-day commitment as little-to-no training time (rest or a very short easy session). Never prescribe a specific clock time.`;
 }
 
-export async function weatherBlock(lat: number, lon: number, sport: "run" | "ride"): Promise<string> {
-  const wx = await getWeather(lat, lon);
+export async function weatherBlock(lat: number, lon: number, sport: "run" | "ride", supplied?: WeatherSnapshot | null): Promise<string> {
+  const wx = supplied === undefined ? await getWeather(lat, lon) : supplied;
   if (!wx) return "";
   const verdict = assessViability(wx, sport);
   const sportWord = sport === "ride" ? "cycling" : "running";

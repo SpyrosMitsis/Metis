@@ -9,6 +9,29 @@ import org.junit.Test
 class EnduranceGoalsTest {
 
     @Test
+    fun `plus increases and minus decreases the displayed pace or speed`() {
+        for (sport in listOf("run", "swim", "ride")) {
+            val initial = EnduranceGoals.defaultPaceSec(sport)
+            val plus = EnduranceGoals.stepPaceValue(sport, initial, increase = true)
+            val minus = EnduranceGoals.stepPaceValue(sport, initial, increase = false)
+            if (sport == "ride") {
+                assertTrue(3600.0 / plus > 3600.0 / initial)
+                assertTrue(3600.0 / minus < 3600.0 / initial)
+            } else {
+                assertTrue(plus > initial)
+                assertTrue(minus < initial)
+            }
+            val spec = EnduranceGoals.pace.getValue(sport)
+            for (edge in listOf(spec.minSecPerKm, spec.maxSecPerKm)) {
+                for (increase in listOf(false, true)) {
+                    assertTrue(EnduranceGoals.stepPaceValue(sport, edge, increase) in spec.minSecPerKm..spec.maxSecPerKm)
+                }
+            }
+        }
+    }
+
+
+    @Test
     fun `posts sit at even screen intervals even though the distances do not`() {
         // Index space, not distance space: the flag is a quarter of the way along
         // at 10K, halfway at the half, three quarters at the marathon.
@@ -67,7 +90,7 @@ class EnduranceGoalsTest {
     // The one rule that makes the slider learnable across three sports whose
     // units point in opposite directions.
     @Test
-    fun `right is always faster and plus is always faster`() {
+    fun `right is always faster and speed steps follow the requested effort`() {
         for (sport in listOf("run", "ride", "swim")) {
             val spec = EnduranceGoals.pace.getValue(sport)
             // Fastest possible = fraction 1.

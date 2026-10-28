@@ -28,6 +28,7 @@ data class WorkoutEntity(
     val note: String = "",
     // false ⇒ created/edited offline and not yet pushed to the cloud.
     val synced: Boolean = true,
+    val plannedWorkoutId: String? = null,
 )
 
 @Entity(tableName = "strength_set")
@@ -42,6 +43,7 @@ data class SetEntity(
     val rpe: Int? = null,
     val isWarmup: Boolean = false,
     val note: String = "",   // free-text per-set note (Q9; also imported from Strong's Notes column)
+    @androidx.room.ColumnInfo(defaultValue = "'reps'") val quantityUnit: String = "reps",
 )
 
 @Entity(tableName = "strength_routine")
@@ -94,6 +96,7 @@ data class SetWithDate(
     val reps: Int,
     val isWarmup: Boolean,
     val startedAt: Long,
+    val quantityUnit: String = "reps",
 )
 
 // Richer projection (muscle + rpe + date) for weekly volume / deload analysis.
@@ -105,7 +108,10 @@ data class DatedSet(
     val rpe: Int?,
     val isWarmup: Boolean,
     val startedAt: Long,
+    val quantityUnit: String = "reps",
 )
+
+data class ExerciseLogSummary(val name: String, val sessionCount: Int, val lastPerformedAt: Long)
 
 @Dao
 interface StrengthDao {
@@ -152,7 +158,7 @@ interface StrengthDao {
     // Best total volume for one exercise within a single session (per-exercise volume PR).
     @Query(
         "SELECT MAX(v) FROM (SELECT workoutId, SUM(weightKg * reps) AS v FROM strength_set " +
-            "WHERE exerciseName = :name AND isWarmup = 0 GROUP BY workoutId)",
+            "WHERE exerciseName = :name AND isWarmup = 0 AND quantityUnit = 'reps' GROUP BY workoutId)",
     )
     suspend fun bestExerciseSessionVolume(name: String): Double?
 
@@ -195,7 +201,7 @@ interface StrengthDao {
 
     @Query(
         """SELECT s.weightKg AS weightKg, s.reps AS reps, s.isWarmup AS isWarmup,
-                  w.startedAt AS startedAt
+                  w.startedAt AS startedAt, s.quantityUnit AS quantityUnit
            FROM strength_set s JOIN strength_workout w ON s.workoutId = w.id
            WHERE s.exerciseName = :name
            ORDER BY w.startedAt ASC""",
@@ -204,6 +210,10 @@ interface StrengthDao {
 
     @Query("SELECT DISTINCT exerciseName FROM strength_set ORDER BY exerciseName")
     suspend fun loggedExercises(): List<String>
+
+    @Query("SELECT s.exerciseName AS name, COUNT(DISTINCT s.workoutId) AS sessionCount, MAX(w.startedAt) AS lastPerformedAt FROM strength_set s JOIN strength_workout w ON w.id = s.workoutId GROUP BY s.exerciseName")
+    suspend fun exerciseLogSummaries(): List<ExerciseLogSummary>
+
 
     // Most-recently-used exercises (for the picker's "Recent" section).
     @Query(
@@ -217,7 +227,7 @@ interface StrengthDao {
     // weekly volume (B5) and deload analysis (B2).
     @Query(
         """SELECT s.exerciseName AS exerciseName, s.muscle AS muscle, s.weightKg AS weightKg,
-                  s.reps AS reps, s.rpe AS rpe, s.isWarmup AS isWarmup, w.startedAt AS startedAt
+                  s.reps AS reps, s.rpe AS rpe, s.isWarmup AS isWarmup, w.startedAt AS startedAt, s.quantityUnit AS quantityUnit
            FROM strength_set s JOIN strength_workout w ON s.workoutId = w.id
            WHERE w.startedAt >= :since ORDER BY w.startedAt""",
     )

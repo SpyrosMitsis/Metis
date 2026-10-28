@@ -368,7 +368,9 @@ internal fun dynamicScheme(
     context: android.content.Context,
     darkTheme: Boolean,
 ): ColorScheme =
-    (if (darkTheme) {
+    (if (Build.VERSION.SDK_INT >= 34 && Build.MANUFACTURER.equals("samsung", ignoreCase = true)) {
+        systemPaletteScheme(context, darkTheme)
+    } else if (darkTheme) {
         dynamicDarkColorScheme(context)
     } else {
         dynamicLightColorScheme(context)

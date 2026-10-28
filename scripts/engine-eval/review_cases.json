@@ -1,0 +1,12 @@
+[
+ {"id":"run-time-missed","sport":"run","reason":"time","outcome":"skipped","expected_action":"repeat","question":"Can familiar running resume without adding the missed run as debt?","expert_review":null},
+ {"id":"ride-equipment","sport":"ride","reason":"equipment","outcome":"skipped","expected_action":"clarify","question":"Can an available trainer preserve intent without inventing equipment?","expert_review":null},
+ {"id":"swim-illness","sport":"swim","reason":"illness","outcome":"skipped","expected_action":"rest","question":"Does the hold prevent unreviewed return-to-training advice?","expert_review":null},
+ {"id":"strength-fatigue","sport":"strength","reason":"fatigue","outcome":"shortened","expected_action":"reduce","question":"Are dose and exercise-specific loads appropriate after fatigue?","expert_review":null},
+ {"id":"mixed-hard-ride","sport":"mixed","reason":"fatigue","outcome":"harder","expected_action":"reduce","question":"Does an unplanned hard ride affect the next run without earning running exposure?","expert_review":null},
+ {"id":"run-pain","sport":"run","reason":"pain","outcome":"shortened","expected_action":"rest","question":"Is pain separated from soreness and is professional escalation appropriate?","expert_review":null},
+ {"id":"swim-shortened","sport":"swim","reason":"time","outcome":"shortened","expected_action":"repeat","question":"Are partial sets represented honestly without inferring stroke/interval completion?","expert_review":null},
+ {"id":"strength-substitution","sport":"strength","reason":"preference","outcome":"substituted","expected_action":"repeat","question":"Are movement coverage, exact exercise and completed dose kept separate?","expert_review":null},
+ {"id":"late-sync","sport":"mixed","reason":"unknown","outcome":"unknown","expected_action":"keep","question":"Is missing sync preserved as unknown rather than a miss?","expert_review":null},
+ {"id":"double-session","sport":"mixed","reason":"time","outcome":"skipped","expected_action":"repeat","question":"Are session IDs, combined transitions and protected commitments preserved?","expert_review":null}
+]

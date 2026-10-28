@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.workoutmaker.app.ui.screens.home.HomeLayout
 import com.workoutmaker.app.ui.screens.settings.SetupNudge
@@ -110,6 +111,7 @@ class AppPreferences @Inject constructor(
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val themeMode = stringPreferencesKey("theme_mode")
         val themePalette = stringPreferencesKey("theme_palette")
+        val featureTourPending = booleanPreferencesKey("feature_tour_pending")
         val onboardingComplete = booleanPreferencesKey("onboarding_complete")
         val customsCleanupV1 = booleanPreferencesKey("customs_cleanup_v1")
         val spendCap = doublePreferencesKey("spend_cap_usd")
@@ -155,6 +157,16 @@ class AppPreferences @Inject constructor(
     suspend fun dismissSetupCard() = edit { p ->
         p[Keys.setupCardDismissals] = (p[Keys.setupCardDismissals] ?: (if (p[Keys.setupCardDismissed] == true) 1 else 0)) + 1
         p[Keys.setupCardDismissedAt] = System.currentTimeMillis()
+    }
+
+    // Local presentation state, isolated by signed-in account; never deletes sets.
+    suspend fun hiddenExerciseStats(owner: String): Set<String> =
+        context.dataStore.data.firstOrNull()?.get(stringSetPreferencesKey("hidden_exercise_stats_$owner")) ?: emptySet()
+
+    suspend fun setExerciseStatsHidden(owner: String, name: String, hidden: Boolean) {
+        require(owner.isNotBlank())
+        val key = stringSetPreferencesKey("hidden_exercise_stats_$owner")
+        context.dataStore.edit { p -> p[key] = if (hidden) p[key].orEmpty() + name else p[key].orEmpty() - name }
     }
 
     val calendarWeekView: Flow<Boolean> =
@@ -211,6 +223,9 @@ class AppPreferences @Inject constructor(
     // Last KNOWN onboarding state — consulted only when the network check fails,
     // so an offline cold start doesn't dump an onboarded user back into the
     // welcome flow. Reset on sign-out.
+    val featureTourPending: Flow<Boolean> = context.dataStore.data.map { it[Keys.featureTourPending] ?: false }
+    suspend fun setFeatureTourPending(pending: Boolean) = edit { it[Keys.featureTourPending] = pending }
+
     suspend fun onboardingCompleteCached(): Boolean =
         context.dataStore.data.firstOrNull()?.get(Keys.onboardingComplete) ?: false
 

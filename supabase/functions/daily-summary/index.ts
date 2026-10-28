@@ -1,3 +1,4 @@
+import { sessionState } from "../_shared/session_context.ts";
 // daily-summary — compute the dashboard payload: readiness score (0-100),
 // today's planned workout, TSB sparkline (14d), and weekly load vs target.
 //
@@ -90,8 +91,8 @@ Deno.serve(async (req) => {
         .then((r) => r, () => ({ data: null, error: true })),
       admin.from("effective_activities").select("date, type, distance_m, tss, ctl, atl, data_json, planned_workout_id, link_source")
         .eq("user_id", userId).gte("date", since14).lte("date", today).order("date", { ascending: true }),
-      admin.from("planned_workouts").select("*").eq("user_id", userId).eq("date", today),
-      admin.from("planned_workouts").select("date, type, workout_json, completed")
+      admin.from("reconciled_session_plans").select("*").eq("user_id", userId).eq("date", today),
+      admin.from("reconciled_session_plans").select("date, type, workout_json, completed, skipped, reconciliation_status")
         .eq("user_id", userId).gte("date", since7).lte("date", today).neq("type", "rest"),
       admin.from("user_profiles").select("injury_backoff").eq("id", userId).single()
         .then((r) => r, () => ({ data: null })),
@@ -169,6 +170,7 @@ Deno.serve(async (req) => {
 
     // Anchor on the requested day so a missing today reads as missing.
     const recovery = computeRecovery(wells, hrvSeries, rhrSeries, today);
+    const planningState = await sessionState(admin,userId,profile?.onboarding??{},today,"rest");
     const readiness = recovery.score;
     const band = recovery.band;
 
@@ -241,9 +243,8 @@ Deno.serve(async (req) => {
     const prevTss = prevWeek.reduce((s, a) => s + (a.tss ?? 0), 0);
     const bySport = new Map<string, number>();
     for (const a of week7) bySport.set(sportOf(a.type), (bySport.get(sportOf(a.type)) ?? 0) + (a.tss ?? 0));
-    const completedDates = new Set(week7.map((a) => a.date));
     const plannedNonRest = (plannedWeek ?? []);
-    const doneCount = plannedNonRest.filter((p) => p.completed || completedDates.has(p.date)).length;
+    const doneCount = plannedNonRest.filter((p) => !p.skipped && (p.completed || ["completed_as_planned", "modified", "substituted"].includes(p.reconciliation_status))).length;
     const standout = [...week7].sort((a, b) => (b.tss ?? 0) - (a.tss ?? 0))[0] ?? null;
     const weekReview = {
       adherence: {
@@ -349,7 +350,9 @@ Deno.serve(async (req) => {
 
     return json({
       date: today,
+      readiness_context: planningState.readiness,
       readiness: {
+        decision_score: recovery.basis === "none" ? null : readiness,
         score: readiness,
         band,
         components: {

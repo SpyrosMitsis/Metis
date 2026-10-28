@@ -82,3 +82,9 @@ verify_jwt = false
 
 [functions.sync-calendar]
 verify_jwt = true
+
+[functions.adapt-plan]
+verify_jwt = true
+
+[functions.session-feedback]
+verify_jwt = true

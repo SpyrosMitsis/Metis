@@ -5,8 +5,7 @@ import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // POST { workout_id }
 
 import { handleOptions, json } from "../_shared/cors.ts";
-import { adminClient, decryptSecret, getUserId } from "../_shared/supabase.ts";
-import { deleteEvent } from "../_shared/intervals.ts";
+import { adminClient, getUserId } from "../_shared/supabase.ts";
 
 Deno.serve(async (req) => {
   const pre = handleOptions(req);
@@ -21,7 +20,7 @@ Deno.serve(async (req) => {
 
     const admin = adminClient();
     const { data: planned } = await admin
-      .from("planned_workouts")
+      .from("reconciled_session_plans")
       .select("id, intervals_event_id")
       .eq("id", workout_id)
       .eq("user_id", userId)

@@ -1,5 +1,7 @@
 package com.workoutmaker.app.ui.screens.history
 
+import com.workoutmaker.app.ui.components.SessionFeedbackPanel
+import com.workoutmaker.app.data.persistedActivityId
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,12 +23,18 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +50,8 @@ import com.workoutmaker.app.data.PlannedWorkout
 import com.workoutmaker.app.data.WorkoutRepository
 import com.workoutmaker.app.ui.collectAsStateSafe
 import com.workoutmaker.app.data.CompletedActivity
+import com.workoutmaker.app.data.ActivityReconciliationViewModel
+import com.workoutmaker.app.data.activityStatusLabel
 import com.workoutmaker.app.ui.components.fmtClock
 import com.workoutmaker.app.ui.components.GhostButton
 import com.workoutmaker.app.ui.components.StatTileGrid
@@ -81,6 +92,9 @@ import com.workoutmaker.app.data.analyzeActivity
 // Non-private so the dedicated Workout History screen can reuse it.
 @Composable
 fun ActivityDetailScreen(activity: CompletedActivity, planned: PlannedWorkout?, onBack: () -> Unit) {
+    val correctionVm: ActivityReconciliationViewModel = hiltViewModel()
+    val correction by correctionVm.state.collectAsStateSafe()
+    val displayedActivity = correction.activity?.takeIf { correction.sourceId == activity.id } ?: activity
     Column(
         Modifier.fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState())
             .padding(16.dp),
@@ -89,9 +103,9 @@ fun ActivityDetailScreen(activity: CompletedActivity, planned: PlannedWorkout?, 
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Column(Modifier.padding(start = 4.dp)) {
-                Text(activity.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(displayedActivity.displayName, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(
-                    "${activity.type ?: "Activity"} · ${activity.date ?: ""}" + if (activity.isManual) " · logged manually" else "",
+                    "${displayedActivity.type ?: "Activity"} · ${displayedActivity.date ?: ""}" + if (displayedActivity.isManual) " · logged manually" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -102,87 +116,162 @@ fun ActivityDetailScreen(activity: CompletedActivity, planned: PlannedWorkout?, 
         // coach's take, then the graphs, then the deeper analytical breakdowns.
 
         // 1. Execution verdict vs the plan — the headline.
-        if (!activity.isManual) AnalysisScoreCard(activity)
+        if (!displayedActivity.isManual) AnalysisScoreCard(displayedActivity)
 
         // 2. Key metrics at a glance.
         SectionCard {
             SectionLabel("Summary", color = MaterialTheme.colorScheme.primary)
             StatTileGrid(
                 buildList {
-                    activity.distanceKm?.let { if (it > 0) add("Distance" to "%.2f km".format(it)) }
-                    activity.durationMin?.let { if (it > 0) add("Duration" to "$it min") }
+                    displayedActivity.distanceKm?.let { if (it > 0) add("Distance" to "%.2f km".format(it)) }
+                    displayedActivity.durationMin?.let { if (it > 0) add("Duration" to "$it min") }
                     // Elapsed only when it differs meaningfully from moving time (≥1 min of pauses).
-                    activity.elapsedSeconds?.let { el ->
-                        val mv = activity.duration_seconds ?: 0
+                    displayedActivity.elapsedSeconds?.let { el ->
+                        val mv = displayedActivity.duration_seconds ?: 0
                         if (el - mv >= 60) add("Elapsed" to "${el / 60} min")
                     }
-                    if (activity.isSwim) {
-                        activity.paceSecPer100m?.let { add("Avg pace" to "${fmtPaceSec(it)} /100m") }
-                        activity.maxPaceSecPer100m?.let { add("Best pace" to "${fmtPaceSec(it)} /100m") }
+                    if (displayedActivity.isSwim) {
+                        displayedActivity.paceSecPer100m?.let { add("Avg pace" to "${fmtPaceSec(it)} /100m") }
+                        displayedActivity.maxPaceSecPer100m?.let { add("Best pace" to "${fmtPaceSec(it)} /100m") }
                     } else {
-                        activity.paceSecPerKm?.let { add("Avg pace" to "${fmtPaceSec(it)} /km") }
-                        activity.maxPaceSecPerKm?.let { add("Best pace" to "${fmtPaceSec(it)} /km") }
+                        displayedActivity.paceSecPerKm?.let { add("Avg pace" to "${fmtPaceSec(it)} /km") }
+                        displayedActivity.maxPaceSecPerKm?.let { add("Best pace" to "${fmtPaceSec(it)} /km") }
                     }
-                    activity.avg_hr?.let { add("Avg HR" to "$it bpm") }
-                    activity.maxHr?.let { add("Max HR" to "$it bpm") }
-                    activity.avgPower?.let { add("Avg power" to "$it W") }
-                    activity.normalizedPower?.let { add("Norm. power" to "$it W") }
-                    activity.avgCadence?.let { add("Avg cadence" to "$it spm") }
-                    activity.maxCadence?.let { add("Max cadence" to "$it spm") }
-                    activity.decouplingPct?.let { add("HR drift" to "%.1f%%".format(it)) }
-                    activity.elevationGain?.let { add("Elevation" to "$it m") }
-                    activity.avgTempC?.let { add("Avg temp" to "$it°C") }
-                    activity.calories?.let { add("Calories" to "$it kcal") }
-                    activity.tss?.let { if (it > 0) add("Training load" to "${it.toInt()} TSS") }
+                    displayedActivity.avg_hr?.let { add("Avg HR" to "$it bpm") }
+                    displayedActivity.maxHr?.let { add("Max HR" to "$it bpm") }
+                    displayedActivity.avgPower?.let { add("Avg power" to "$it W") }
+                    displayedActivity.normalizedPower?.let { add("Norm. power" to "$it W") }
+                    displayedActivity.avgCadence?.let { add("Avg cadence" to "$it spm") }
+                    displayedActivity.maxCadence?.let { add("Max cadence" to "$it spm") }
+                    displayedActivity.decouplingPct?.let { add("HR drift" to "%.1f%%".format(it)) }
+                    displayedActivity.elevationGain?.let { add("Elevation" to "$it m") }
+                    displayedActivity.avgTempC?.let { add("Avg temp" to "$it°C") }
+                    displayedActivity.calories?.let { add("Calories" to "$it kcal") }
+                    displayedActivity.tss?.let { if (it > 0) add("Training load" to "${it.toInt()} TSS") }
                 },
             )
         }
 
+        ActivityReconciliation(activity, correctionVm)
+        if (persistedActivityId(displayedActivity.id)) SessionFeedbackPanel(date = displayedActivity.date ?: java.time.LocalDate.now().toString(), planId = displayedActivity.planned_workout_id, activityId = displayedActivity.id)
+
         // 3. The coach's narrative takeaway.
-        if (!activity.isManual) CoachFeedbackCard(activity)
+        if (!displayedActivity.isManual) CoachFeedbackCard(displayedActivity)
 
         // 4. Graphs over time: pace, heart rate, cadence, power.
-        if (!activity.isManual) ActivityChartsSection(activity)
+        if (!displayedActivity.isManual) ActivityChartsSection(displayedActivity)
 
         // --- deeper analytical detail below -----------------------------------
 
         // 5. How the session's intensity was distributed.
-        activity.hrZoneTimes?.let { HrZoneCard(it) }
+        displayedActivity.hrZoneTimes?.let { HrZoneCard(it) }
 
         // 6. Per-kilometre splits.
-        if (!activity.isManual) SplitsCard(activity)
+        if (!displayedActivity.isManual) SplitsCard(displayedActivity)
 
-        // 7. Planned vs actual on this date.
+        // 7. Plan match summary.
         planned?.let { p ->
             SectionCard {
                 SectionLabel("On the plan that day", color = mossAccent())
                 Text(p.workout_json.title, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    if (activity.planned_workout_id == p.id) {
-                        if (activity.link_source == "athlete") "Your assessment: ${activity.session_state.replace('_', ' ')}."
+                    if (displayedActivity.planned_workout_id == p.id) {
+                        if (displayedActivity.link_source == "athlete") "Your assessment: ${displayedActivity.session_state.replace('_', ' ')}."
                         else "Possible match to this plan; completion and dose are not confirmed."
                     } else "This activity has not been linked to this plan.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (activity.planned_workout_id == p.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                    color = if (displayedActivity.planned_workout_id == p.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
                 )
             }
         }
 
         // 8. E3-style load context: what this did to your fitness.
-        if (activity.ctl != null || activity.atl != null) {
+        if (displayedActivity.ctl != null || displayedActivity.atl != null) {
             SectionCard {
                 SectionLabel("Fitness after this", color = MaterialTheme.colorScheme.secondary)
                 StatTileGrid(
                     buildList {
-                        activity.ctl?.let { add("Fitness (CTL)" to "%.0f".format(it)) }
-                        activity.atl?.let { add("Fatigue (ATL)" to "%.0f".format(it)) }
-                        if (activity.ctl != null && activity.atl != null) {
-                            add("Form (TSB)" to "%.0f".format(activity.ctl!! - activity.atl!!))
+                        displayedActivity.ctl?.let { add("Fitness (CTL)" to "%.0f".format(it)) }
+                        displayedActivity.atl?.let { add("Fatigue (ATL)" to "%.0f".format(it)) }
+                        if (displayedActivity.ctl != null && displayedActivity.atl != null) {
+                            add("Form (TSB)" to "%.0f".format(displayedActivity.ctl!! - displayedActivity.atl!!))
                         }
                     },
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ClassificationSelector(label: String, selected: String, options: List<Pair<String, String>>, enabled: Boolean = true, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box {
+            OutlinedButton(onClick = { expanded = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+                Text(selected, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                Text("▾")
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 360.dp)) {
+                options.forEach { (value, title) ->
+                    DropdownMenuItem(text = { Text(title) }, onClick = { expanded = false; onSelect(value) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityReconciliation(activity: CompletedActivity, vm: ActivityReconciliationViewModel) {
+    val state by vm.state.collectAsStateSafe()
+    var advanced by remember(activity.id) { mutableStateOf(false) }
+    LaunchedEffect(activity.id, activity.content_revision) { vm.load(activity) }
+    val saved = state.activity ?: activity
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel("Activity classification", color = MaterialTheme.colorScheme.secondary)
+            Spacer(Modifier.weight(1f))
+            if (!state.editing) TextButton(onClick = { vm.edit(activity) }, enabled = !state.loading) {
+                Text(if (state.loading) "Loading…" else "Edit")
+            }
+        }
+        Text("${saved.type ?: "Activity"} · ${if (saved.session_state == "unknown") "Recorded activity" else activityStatusLabel(saved.session_state)}", style = MaterialTheme.typography.bodyMedium)
+        Text(if (saved.planned_workout_id == null) "No linked workout" else if (saved.link_source == "athlete") "Linked workout" else "Possible workout match",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (state.editing) {
+            ClassificationSelector("Activity type", state.actualType.ifBlank { "Choose activity" },
+                listOf("Run", "Ride", "Swim", "Weight training", "Walk", "Hike", "Rowing", "Other").map { it to it }, enabled = !state.saving) { value ->
+                vm.state.value = state.copy(actualType = value, message = null)
+            }
+            ClassificationSelector("Workout", state.plans.find { it.id == state.planId }?.let { "${it.date} · ${it.workout_json.title}" } ?: if (state.planId.isBlank()) "No linked workout" else "Linked workout",
+                listOf("" to "No linked workout") + state.plans.map { it.id to "${it.date} · ${it.workout_json.title}" }, enabled = !state.saving) { value ->
+                vm.state.value = state.copy(planId = value, duplicateId = "", status = if (value.isEmpty() || state.status == "unplanned") "unknown" else state.status, message = null)
+            }
+            val statuses = if (state.planId.isBlank()) listOf("unplanned", "unknown") else listOf("completed_as_planned", "modified", "substituted", "unknown")
+            ClassificationSelector("How it relates to the workout", activityStatusLabel(state.status), statuses.map { it to activityStatusLabel(it) }, enabled = !state.saving) { value ->
+                vm.state.value = state.copy(status = value, message = null)
+            }
+            TextButton(onClick = { advanced = !advanced }, enabled = !state.saving) { Text(if (advanced) "Hide additional options" else "Parts and duplicate recordings") }
+            if (advanced) {
+                ClassificationSelector("Session parts", state.activities.find { (it.session_group_id ?: it.id) == state.groupId }?.displayName ?: "Separate activity",
+                    listOf(saved.id to "Separate activity") + state.activities.map { (it.session_group_id ?: it.id) to "Part of ${it.displayName}" }, enabled = !state.saving) { value ->
+                    vm.state.value = state.copy(groupId = value, duplicateId = "", message = null)
+                }
+                ClassificationSelector("Duplicate recording", state.activities.find { it.id == state.duplicateId }?.displayName ?: "Keep this activity",
+                    listOf("" to "Keep this activity") + state.activities.map { it.id to "Duplicate of ${it.displayName}" }, enabled = !state.saving) { value ->
+                    vm.state.value = state.copy(duplicateId = value, groupId = "", planId = if (value.isNotEmpty()) "" else state.planId, status = if (value.isNotEmpty()) "unknown" else state.status, message = null)
+                }
+                if (saved.duplicate_candidate_ids.isNotEmpty()) ClassificationSelector("Restore a hidden recording", state.unmergeId.take(8).ifBlank { "None" },
+                    listOf("" to "None") + saved.duplicate_candidate_ids.map { it to "Recording ${it.take(8)}" }, enabled = !state.saving) { value -> vm.state.value = state.copy(unmergeId = value) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { vm.correct() }, enabled = state.canSave) { Text(if (state.saving) "Saving…" else "Save changes") }
+                TextButton(onClick = { vm.cancel() }, enabled = !state.saving) { Text("Cancel") }
+            }
+        }
+        state.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (state.needsSync) TextButton(onClick = { vm.edit(activity, sync = true) }, enabled = !state.loading) { Text("Sync activity") }
     }
 }
 
@@ -299,6 +388,9 @@ internal fun AnalysisScoreCard(
             }
         } else {
             Text(a.label ?: "No planned session to compare against.", style = MaterialTheme.typography.bodyMedium)
+        }
+        a.execution_evidence?.let { evidence ->
+            Text(evidence.summary, style = MaterialTheme.typography.bodyMedium)
         }
         a.components.forEach { c ->
             Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {

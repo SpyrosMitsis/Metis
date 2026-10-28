@@ -122,7 +122,7 @@ internal val EXPERIENCE_BY_SPORT: Map<String, List<String>> = mapOf(
 // Multi-select equipment; only shown when the athlete lifts.
 internal val EQUIPMENT_ITEMS = listOf(
     "Full gym", "Dumbbells", "Barbell", "Bench", "Squat rack",
-    "Resistance bands", "Pull-up bar", "Kettlebells", "Machines",
+    "Resistance bands", "Band anchor", "Pull-up bar", "Kettlebells", "Cable machine", "Machines", "Treadmill", "Indoor trainer", "Stationary bike", "Power meter",
 )
 
 // Quick-add chips for the onboarding injuries step (appended to the free text).

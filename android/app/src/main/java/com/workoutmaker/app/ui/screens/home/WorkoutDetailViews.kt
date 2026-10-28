@@ -8,6 +8,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import com.workoutmaker.app.data.Workout
 import com.workoutmaker.app.ui.components.ChipRow
 import com.workoutmaker.app.ui.components.QuoteBlock
@@ -88,7 +92,7 @@ fun WorkoutDetail(w: Workout, profile: TrainingProfile? = null) {
     val thresholdSecPerKm = profile?.threshold_pace_per_km?.let { Zones.parsePace(it) }
     val lthr = profile?.lthr
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(w.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(com.workoutmaker.app.strength.displayWorkoutTitle(w), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         ChipRow(
             listOfNotNull(
                 w.type.takeIf { it.isNotBlank() },
@@ -97,8 +101,71 @@ fun WorkoutDetail(w: Workout, profile: TrainingProfile? = null) {
                 "~${w.tss_estimate.toInt()} TSS".takeIf { w.tss_estimate > 0 },
             ),
         )
+        w.prescription?.let { prescription ->
+            val context = androidx.compose.ui.platform.LocalContext.current
+            androidx.compose.material3.TextButton(onClick = {
+                val data = "{\"format\":\"workout-maker-prescription\",\"version\":1,\"prescription\":$prescription}"
+                context.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "application/json"; putExtra(android.content.Intent.EXTRA_TEXT, data)
+                }, "Export workout"))
+            }) { Text("Export workout (.json)") }
+        }
         if (w.coach_note.isNotBlank()) QuoteBlock(w.coach_note)
-        w.sections.forEach { section -> WorkoutSectionItem(section, thresholdSecPerKm, lthr) }
+        if (w.type == "strength") {
+            val groups = com.workoutmaker.app.strength.plannedExerciseGroups(w)
+            Text("${groups.size} exercises", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                groups.forEach { group ->
+                    var showNotes by remember(group.name) { mutableStateOf(false) }
+                    val notes = group.doses.map { it.exercise.notes }.filter { it.isNotBlank() }.distinct()
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(10.dp))
+                            .semantics {
+                                if (notes.isNotEmpty()) stateDescription = if (showNotes) "Notes expanded" else "Notes collapsed"
+                            }
+                            .clickable(
+                                enabled = notes.isNotEmpty(),
+                                role = Role.Button,
+                                onClickLabel = if (showNotes) "Hide exercise notes" else "Show exercise notes",
+                            ) { showNotes = !showNotes }
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(group.name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            if (notes.isNotEmpty()) Text(
+                                if (showNotes) "▴" else "▾",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        group.doses.forEach { dose ->
+                            val ex = dose.exercise
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    if (dose.warmup) "Warm-up" else "Working",
+                                    Modifier.width(58.dp),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    "${ex.sets} × ${ex.reps}" + (ex.weight_kg?.let { " · $it kg" } ?: "") +
+                                        (ex.rest_seconds?.let { " · ${it}s rest" } ?: "") + (" · each side".takeIf { ex.notes.contains("Each side", ignoreCase = true) } ?: ""),
+                                    Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (showNotes) notes.forEach {
+                            Text(it, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        } else w.sections.forEach { section -> WorkoutSectionItem(section.copy(name = section.name.replace(Regex("^warmup:.*", RegexOption.IGNORE_CASE), "Warm-up").replace(Regex("^main:.*", RegexOption.IGNORE_CASE), "Main session").replace(Regex("^cooldown:.*", RegexOption.IGNORE_CASE), "Cool-down")), thresholdSecPerKm, lthr) }
 
         // "Your zones" peek — only for endurance days where thresholds are set.
         val isEndurance = listOf("run", "ride", "bike", "cycl").any { w.type.contains(it, ignoreCase = true) }

@@ -11,7 +11,7 @@ Single Android application module, Kotlin, Jetpack Compose, Hilt, Room, DataStor
 | Startup and routing | `WorkoutMakerApp.kt`, `MainActivity.kt`, `ui/AuthGate.kt` | Logging, notification channels, workers, auth links, auth/onboarding gates, tab and detail navigation |
 | Dependencies/backend | `di/AppModule.kt`, `data/BackendConfig.kt` | Singleton Supabase client, auth, timeouts; custom server changes require restart |
 | Remote data | `data/WorkoutRepository.kt`, `data/WorkoutRepository*.kt` | Auth/account scope, profile cache, feature-specific extension functions, Supabase queries/functions |
-| Local storage | `data/Cache.kt`, `data/AppPreferences.kt`, `strength/StrengthData.kt` | Room v8, migrations, offline dashboard/plan, settings, strength entities/DAOs |
+| Local storage | `data/Cache.kt`, `data/AppPreferences.kt`, `strength/StrengthData.kt` | Room v9, migrations, offline dashboard/plan, settings, strength entities/DAOs |
 | Home | `ui/screens/home/HomeViewModel.kt`, `HomeScreen.kt` | Summary, readiness, check-in, plan generation, feedback; cards split across section files |
 | Coach | `ui/screens/coach/CoachViewModel.kt`, `CoachUiState.kt`, `data/WorkoutRepositoryCoach.kt` | Conversations, SSE streaming, tool progress, settings changes; `CoachScreen` wires content/state |
 | Calendar | `ui/screens/calendar/CalendarViewModel.kt`, `data/WorkoutRepositoryPlan.kt` | Plans, rescheduling, locking, completion, offline plan fallback |
@@ -34,7 +34,7 @@ Single Android application module, Kotlin, Jetpack Compose, Hilt, Room, DataStor
 ## Invariants worth preserving
 
 - Use client-local dates for today and workout grouping. Calendar all-day event timestamps are UTC by provider contract; this is intentionally different.
-- Room strength data can be the only copy of an offline workout. Do not replace migrations with destructive upgrade fallback. Exported schema is `android/app/schemas/`; current version is 8.
+- Room strength data can be the only copy of an offline workout. Do not replace migrations with destructive upgrade fallback. Exported schema is `android/app/schemas/`; current version is 9.
 - Keep parent/children replacement and delete/tombstone creation transactional. Never hold a Room transaction across a network call.
 - Pending local edits win cloud merges. A tombstone means the remote row must not be re-imported.
 - RLS scopes many remote queries; Android often does not include an explicit user filter. Verify schema policies when changing these queries.
@@ -75,3 +75,32 @@ JVM tests live in `app/src/test`; Room/device/Compose tests in `app/src/androidT
 For a feature change, start at its ViewModel, follow the repository extension, then inspect the corresponding `supabase/functions/<name>/index.ts` and migrations. For strength, also read the DAO and queue sequence. Avoid reading every UI section unless the change affects rendering. CI runs both flavors' unit tests, Play lint, Play release/R8, and checks committed Room schemas.
 
 For workout detection, prescription architecture, Jev assessment and catalog constraints, read [Coach engine review](COACH_ENGINE_REVIEW_2026-10-22.md).
+
+## Strength stats and keyboard layout (2026-10-27)
+
+- `StrengthPickerViews.kt` renders the stats index with pinned search/filters and a lazy list. `ExerciseStatsIndex.kt` owns visibility and name/muscle/equipment search. Differently named variants keep separate histories.
+- Custom entries (including imported names outside the bundled catalog) expose a confirmed delete action. `StrengthCatalog` deletes the custom definition through the existing sync tombstone path. Logged sets, routines and workouts remain intact. Bundled definitions are protected.
+- Hiding the deleted name from stats is account-scoped, device-local DataStore presentation state (`hidden_exercise_stats_<owner>`), separate from transient sync tombstones. Hidden rows still open historical stats and can be restored; restoring visibility does not recreate a custom definition. Creating the custom exercise again clears its hidden flag. A custom override of a bundled name reverts to the bundled definition and remains visible.
+- `StrengthDao.exerciseLogSummaries()` counts distinct workout IDs and returns each exercise's latest local timestamp. This is a projection only, with no Room schema change.
+- `ActiveWorkoutView` applies `imePadding()` to its Scaffold so the live rest countdown stays above the keyboard. `MainActivity` already consumes outer navigation insets: do not add a second keyboard-height spacer. Secondary add/rest buttons hide while typing; countdown adjustment and skip remain available.
+- Regression coverage: `ExerciseStatsIndexTest` (filtering and variants), `StrengthStatsContentTest` (confirmed deletion, restore and timer controls), `ExerciseStatsPersistenceTest` (session counts and preserved history). Device tests require an accepted installation on a phone/emulator.
+
+Build recovery note: overlapping Gradle invocations in the same checkout were observed with missing generated Hilt classes (`StrengthViewModel_HiltModules.BindsModule` / `WorkoutMakerApp`). A clean single-worker `assemblePlayDebug` succeeded, followed by the ordinary `scripts/dev.sh android:build` command. Keep builds in one checkout sequential; use a separate checkout/copy for parallel validation. Clearing generated outputs does not require changing application source or deleting app data.
+
+## Prescribed strength presentation and import (2026-10-27)
+
+`PlannedExerciseGroups.kt` groups warm-up and main dose entries for one exercise without changing the canonical prescription. `WorkoutDetailViews.kt` shows one card per exercise, separate warm-up/working-set rows and expandable notes. `StrengthViewModel.seedFromWorkout` uses those same groups, preserves planned targets and marks warm-up sets. `SavedSession.prescribedTargets` keeps that behavior after restart, including workouts without a calendar link; old snapshots remain readable. See `WORKOUT_ENGINE_AUDIT_2026-10-27.md` for scheduling, time, goal and injury invariants and verification.
+
+## Training-week setup and planner streamlining (2026-10-27)
+
+`SettingsSections.TrainingWeekSection` keeps everyday coaching preferences visible. `PlanningControls.kt` uses `PlanningDetailsCard` for specialist settings and `PlanningChoiceGroup` for readable labels without changing stored keys. Saveable state holders retain optional form drafts when sections collapse. `Periodization.configure` is the shared onboarding/settings action: enabling sets a missing local start date once, preserving existing dates on later toggles. The load illustration is explicitly separate from the actual structured program.
+
+Backend weekly invariants are prepared in a request-local `weekFor(date)` record in `deterministic_week.ts`; its budget is fetched once per calendar week. `commitments(sport)` supplies frequency and minute accounting; `withForecast` supplies the existing shared forecast behavior. See [Planner streamlining](WORKOUT_PLANNER_STREAMLINING_2026-10-27.md) for parity evidence and limitations.
+
+## Daily coach questions and configured device builds (2026-10-27)
+
+`get_today_plan` is a read with full saved instructions. `coach_turn.ts` and the chat executor prevent ordinary daily questions from invoking calendar edits; both model transports use the same restricted catalog. `CoachScreen` suppresses unsaved-proposal prompts after either daily or weekly plan reads. Goal-race preparation now defaults on for A events; overrides live under advanced program options. See `COACH_INTEGRATION_FIX_2026-10-27.md`.
+
+**Before installing an isolated-checkout APK, copy the real `android/local.properties` into that checkout and verify its generated backend URL/key match.** A successful compile does not establish runtime server configuration. Do not print keys or copy private configuration into tracked files. An APK built without those settings can appear signed out and unable to reach the server. The corrected build restored the existing session without a data wipe.
+
+Physical UI tests require the updated AndroidX Test/Espresso dependencies on newer Android. `PlanningControlsTest` and `CoachContentTest` use fixtures. `CoachTodayLiveTest` requires explicit `liveCoach=true`; it sends a real daily question on the signed-in account, so opt-in is required even though it does not request a calendar change.

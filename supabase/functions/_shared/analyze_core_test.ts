@@ -58,3 +58,10 @@ Deno.test("substring exercise variants cannot inherit the original lift prescrip
   assertEquals(cov.substitutions, [{ logged: "Chest-Supported Dumbbell Row", planned: "Dumbbell Row" }]);
   assertEquals(matchCoverage([P("", null)], [P("Anything", null)]).done, 0);
 });
+
+Deno.test("exact exercise, curated movement and primary-muscle overlap remain distinct", () => {
+  const cov = matchCoverage([P("Barbell Bench Press", "Chest"), P("Cable Crossover", "Chest")], [P("Dumbbell Floor Press", "Chest"), P("Pec Deck", "Chest")]);
+  assertEquals(cov.exactDone, 0);
+  assertEquals(cov.movementDone, 1);
+  assertEquals(cov.done, 2);
+});

@@ -76,7 +76,7 @@ Deno.test("scoreRaw: reports the violation text and kinds, not just a count", ()
     coach_note: "", sections: [{
       name: "Main Set", duration_minutes: 50,
       exercises: [{
-        name: "Barbell Squat", sets: 3, reps: "5", weight_kg: 500,
+        name: "Back Squat", sets: 3, reps: "5", weight_kg: 500,
         pace_zone: null, hr_zone: null, rest_seconds: 180, notes: "",
       }],
     }],

@@ -9,6 +9,7 @@
 // type enum, missing title, sections not an array, empty non-rest workout.
 // ============================================================================
 
+import { PrescriptionSchema } from "./prescription.ts";
 import { z } from "npm:zod@3.23.8";
 import type { Workout } from "./types.ts";
 
@@ -32,7 +33,24 @@ const DEFAULT_EXERCISE = {
   compound: null as boolean | null,
 };
 
-const ExerciseSchema = z.object({
+// Optional model metadata must not erase an otherwise valid exercise. Accept
+// unambiguous JSON boolean encodings, but surface malformed objects for repair.
+const optionalDoseNumber = (schema: z.ZodNumber) => z.preprocess(v => v === null ? undefined : v, schema.optional());
+const doseBoolean = z.preprocess(v => {
+  if (v === null) return undefined;
+  if (v === 0 || v === "0" || v === "false") return false;
+  if (v === 1 || v === "1" || v === "true") return true;
+  return v;
+}, z.boolean().optional());
+const DoseSchema = z.object({
+  work_seconds: optionalDoseNumber(z.number().finite().positive()),
+  distance_m: optionalDoseNumber(z.number().finite().positive()),
+  stroke: z.preprocess(v => v === null ? undefined : v, z.string().optional()),
+  recovery_after_last: doseBoolean,
+  transition_seconds: optionalDoseNumber(z.number().finite().min(0)),
+}).nullish().transform(v => v ?? undefined);
+const ExerciseObjectSchema = z.object({
+  dose: DoseSchema,
   name: str("Exercise"),
   sets: num(1),
   reps: z.unknown().transform((v) => (v == null ? "" : String(v))),
@@ -46,16 +64,21 @@ const ExerciseSchema = z.object({
   muscle: z.unknown().transform((v) => (typeof v === "string" ? v : null)),
   category: z.unknown().transform((v) => (typeof v === "string" ? v : null)),
   compound: z.unknown().transform((v) => (typeof v === "boolean" ? v : null)),
-}).catch(DEFAULT_EXERCISE);
+});
+const objectOr = (value: unknown, fallback: unknown) =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value : fallback;
+const ExerciseSchema = z.preprocess(v => objectOr(v, DEFAULT_EXERCISE), ExerciseObjectSchema);
 
-const SectionSchema = z.object({
+const SectionObjectSchema = z.object({
   name: str("Block"),
   duration_minutes: num(0),
-  exercises: z.array(ExerciseSchema).catch([]),
-}).catch({ name: "Block", duration_minutes: 0, exercises: [] });
+  exercises: z.array(ExerciseSchema),
+});
+const SectionSchema = z.preprocess(v => objectOr(v, { name: "Block", duration_minutes: 0, exercises: [] }), SectionObjectSchema);
 
 const WorkoutSchema = z
   .object({
+    prescription: PrescriptionSchema.optional(),
     type: z.enum(["run", "ride", "swim", "strength", "rest"]),
     title: z.string(),
     duration_minutes: num(0).transform((v) => Math.max(0, v)),
@@ -101,11 +124,6 @@ export function validateWorkout(obj: unknown): { ok: boolean; workout?: Workout;
 export interface WeekDay { date: string; weekday: string; session: Workout }
 export interface WeekPlan { week_focus: string; rationale: string; days: WeekDay[] }
 
-const REST_DAY: Workout = {
-  type: "rest", title: "Rest day", duration_minutes: 0,
-  tss_estimate: 0, rpe_target: 0, sections: [], coach_note: "Recovery.",
-};
-
 const WeekPlanSchema = z
   .object({
     week_focus: str("General"),
@@ -116,15 +134,27 @@ const WeekPlanSchema = z
       session: z.unknown(),
     })).min(1, "missing days[]"),
   })
+  .superRefine((o, ctx) => {
+    const seen = new Set<string>();
+    o.days.forEach((d, index) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !Number.isFinite(Date.parse(d.date)) ||
+          new Date(d.date).toISOString().slice(0, 10) !== d.date || seen.has(d.date)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["days", index, "date"], message: "Invalid or duplicate date" });
+      }
+      seen.add(d.date);
+      const v = validateWorkout(d.session);
+      if (!v.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["days", index, "session"], message: v.error ?? "Invalid session" });
+    });
+  })
   .transform((o): WeekPlan => ({
     week_focus: o.week_focus,
     rationale: o.rationale,
     days: o.days
       .filter((d) => d.date)
       .map((d) => {
-        // A day that won't validate degrades to a rest day rather than failing the week.
+        // Refinement above rejects the entire plan before any storage change.
         const v = validateWorkout(d.session);
-        return { date: d.date, weekday: d.weekday, session: v.ok && v.workout ? v.workout : REST_DAY };
+        return { date: d.date, weekday: d.weekday, session: v.workout! };
       }),
   }));
 

@@ -195,3 +195,16 @@ Deno.test("same snapshot can be ok for one sport and blocked for the other", () 
   assertEquals(assessViability(wetRoads, "ride").tier, "blocked");
   assertEquals(assessViability(wetRoads, "run").tier, "ok");
 });
+
+Deno.test("weather observations distinguish missing fields from genuine zero", async () => {
+  const { getWeather } = await import("./weather.ts");
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({ current: {}, daily: {} })))) as typeof fetch;
+    assertEquals(await getWeather(0, 0), null);
+    globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({ current: { time: "2026-10-23T12:00", temperature_2m: 0, apparent_temperature: 0,
+      relative_humidity_2m: 50, wind_speed_10m: 0, precipitation: 0 }, daily: { precipitation_probability_max: [0], temperature_2m_max: [0] } })))) as typeof fetch;
+    const weather = await getWeather(0, 0);
+    assertEquals(weather?.tempC, 0); assertEquals(weather?.localDate, "2026-10-23");
+  } finally { globalThis.fetch = original; }
+});

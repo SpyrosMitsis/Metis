@@ -172,7 +172,7 @@ object EnduranceGoals {
     /**
      * Slider position, 0..1. Deliberately inverted against the stored value so
      * RIGHT IS ALWAYS FASTER, whether the displayed unit counts up (km/h) or
-     * down (min/km). Same reason `+` always means faster.
+     * down (min/km). The slider ends are labeled by effort.
      */
     fun paceFraction(sport: String, secPerKm: Int): Float {
         val s = specOf(sport)
@@ -187,7 +187,7 @@ object EnduranceGoals {
         return clampPace(sport, raw.roundToInt())
     }
 
-    /** One tap of minus/plus, in whatever unit this sport is shown in. */
+    /** One step faster or slower, in whatever unit this sport is shown in. */
     fun stepPace(sport: String, secPerKm: Int, faster: Boolean): Int {
         val s = specOf(sport)
         return when (s.mode) {
@@ -199,6 +199,10 @@ object EnduranceGoals {
             PaceMode.PER_KM -> clampPace(sport, secPerKm + if (faster) -RUN_STEP_SEC else RUN_STEP_SEC)
         }
     }
+
+    /** Minus/plus change the displayed number, including time-based paces. */
+    fun stepPaceValue(sport: String, secPerKm: Int, increase: Boolean): Int =
+        stepPace(sport, secPerKm, faster = if (specOf(sport).mode == PaceMode.SPEED) increase else !increase)
 
     fun clampPace(sport: String, secPerKm: Int): Int {
         val s = specOf(sport)

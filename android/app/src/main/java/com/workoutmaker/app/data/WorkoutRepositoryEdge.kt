@@ -169,7 +169,7 @@ suspend fun WorkoutRepository.syncPlanToDeviceCalendar() = withAccount {
         val from = LocalDate.now()
         val until = from.plusDays(14)
         val entries = plannedWorkouts(from.toString())
-            .filter { it.type != "rest" && !it.skipped }
+            .filter { it.workout_json.duration_minutes > 0 && !it.skipped }
             .mapNotNull { p ->
                 val date = runCatching { LocalDate.parse(p.date) }.getOrNull()
                     ?: return@mapNotNull null
@@ -179,6 +179,7 @@ suspend fun WorkoutRepository.syncPlanToDeviceCalendar() = withAccount {
                     date = p.date,
                     title = calendarEventTitle(w, p.type),
                     detail = calendarEventDetail(w, p.type),
+                    startMinute = p.start_minute, durationMinutes = w.duration_minutes.toDouble(),
                 )
             }
         deviceCalendar.syncPlan(entries, from, 14)
@@ -238,12 +239,13 @@ suspend fun WorkoutRepository.analyzeActivity(activityId: String, force: Boolean
     )
 
 // Execution analysis for a logged strength session (planned vs lifted).
-suspend fun WorkoutRepository.analyzeStrength(date: String, force: Boolean = false, peek: Boolean = false): StrengthAnalysis =
+suspend fun WorkoutRepository.analyzeStrength(date: String, force: Boolean = false, peek: Boolean = false, workoutId: String? = null): StrengthAnalysis =
     json.decodeFromString(
         supabase.functions.invoke("analyze-strength") {
             setBody(
                 buildJsonObject {
                     put("date", JsonPrimitive(date))
+                    workoutId?.let { put("workout_id", JsonPrimitive(it)) }
                     put("force", JsonPrimitive(force))
                     put("peek", JsonPrimitive(peek))
                 }.toString(),

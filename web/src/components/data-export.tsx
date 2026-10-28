@@ -90,7 +90,7 @@ export function DataExport() {
   const exportPlan = () =>
     run("plan", async () => {
       const [{ data: planned }, { data: weeks }, { data: races }] = await Promise.all([
-        supabase.from("planned_workouts").select("*").order("date", { ascending: true }),
+        supabase.from("reconciled_session_plans").select("*").order("date", { ascending: true }),
         supabase.from("week_plans").select("*").order("start_date", { ascending: true }),
         supabase.from("races").select("*").order("date", { ascending: true }),
       ]);

@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.workoutmaker.app.data.AppPreferences
 import com.workoutmaker.app.data.CompletedActivity
+import com.workoutmaker.app.data.resolveActivity
 import com.workoutmaker.app.data.IntervalsActivity
 import com.workoutmaker.app.data.IntervalsStats
 import com.workoutmaker.app.data.LocationProvider
@@ -367,21 +368,18 @@ class HomeViewModel @Inject constructor(
         // Strength path: if an in-app strength session was logged on this date, open
         // the merged detail (logged + watch) rather than the watch-only one.
         val zone = ZoneId.systemDefault()
-        val logged = runCatching { strength.recentWorkouts(500) }.getOrNull()?.firstOrNull { w ->
-            Instant.ofEpochMilli(w.startedAt).atZone(zone).toLocalDate().toString() == a.date
-        }
+        val loggedForDay = runCatching { strength.recentWorkouts(500) }.getOrNull().orEmpty()
+            .filter { w -> Instant.ofEpochMilli(w.startedAt).atZone(zone).toLocalDate().toString() == a.date }
+        val logged = loggedForDay.singleOrNull()?.takeIf { looksLike("strength", a.type) }
         if (logged != null) {
             val sets = runCatching { strength.setsForWorkout(logged.id) }.getOrNull().orEmpty()
-            val watch = completed.firstOrNull { c -> c.date == a.date && looksLike("strength", c.type) }
+            val watch = completed.filter { c -> overlapsStrength(logged, c) }
+                .minByOrNull { c -> kotlin.math.abs((runCatching { c.started_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull() ?: logged.startedAt) - logged.startedAt) }
             openedStrength.value = StrengthDetail(logged, sets, watch)
             return@launch
         }
 
-        val match = completed.firstOrNull { c ->
-            c.date == a.date &&
-                (c.displayName.equals(a.name, ignoreCase = true) ||
-                    (a.name.isBlank() && (c.type ?: "").equals(a.type, ignoreCase = true)))
-        }
+        val match = resolveActivity(a.toCompleted(), completed)
         openedActivity.value = match ?: a.toCompleted()
     }
     fun closeActivity() { openedActivity.value = null }
@@ -393,12 +391,13 @@ class HomeViewModel @Inject constructor(
     fun openDebrief(d: SessionDebrief) = viewModelScope.launch {
         if (d.kind == "strength") {
             val zone = ZoneId.systemDefault()
-            val logged = runCatching { strength.recentWorkouts(500) }.getOrNull()?.firstOrNull { w ->
+            val logged = runCatching { strength.recentWorkouts(500) }.getOrNull().orEmpty().filter { w ->
                 Instant.ofEpochMilli(w.startedAt).atZone(zone).toLocalDate().toString() == d.date
-            } ?: return@launch
+            }.singleOrNull() ?: return@launch
             val sets = runCatching { strength.setsForWorkout(logged.id) }.getOrNull().orEmpty()
             val watch = runCatching { repo.completedActivities(d.date) }.getOrNull().orEmpty()
-                .firstOrNull { c -> c.date == d.date && looksLike("strength", c.type) }
+                .filter { c -> overlapsStrength(logged, c) }
+                .minByOrNull { c -> kotlin.math.abs((runCatching { c.started_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull() ?: logged.startedAt) - logged.startedAt) }
             openedStrength.value = StrengthDetail(logged, sets, watch)
             return@launch
         }
@@ -411,7 +410,7 @@ class HomeViewModel @Inject constructor(
     private fun IntervalsActivity.toCompleted() =
         CompletedActivity(
             id = "digest:$date:$name",
-            intervals_id = "digest",
+            intervals_id = intervals_id ?: "digest",
             type = type.ifBlank { null },
             date = date,
             duration_seconds = duration_min?.let { it * 60 },
@@ -425,13 +424,22 @@ class HomeViewModel @Inject constructor(
             },
         )
 
+    private fun overlapsStrength(workout: WorkoutEntity, activity: CompletedActivity): Boolean {
+        if (!looksLike("strength", activity.type)) return false
+        val start = runCatching { activity.started_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull() ?: return false
+        val end = runCatching { activity.ended_at?.let { Instant.parse(it).toEpochMilli() } }.getOrNull()
+            ?: (start + (activity.duration_seconds ?: 0) * 1000L)
+        val slack = 30 * 60 * 1000L
+        return start < workout.endedAt + slack && workout.startedAt < end + slack
+    }
+
     fun hasLocation(): Boolean = location.hasPermission()
 
-    fun generate() = viewModelScope.launch {
+    fun generate(type: String = "auto", instruction: String = "") = viewModelScope.launch {
         generating.value = true
         val loc = location.lastKnown()
         runCatching {
-            repo.generateWorkout(GenerateRequest(type = "auto", lat = loc?.first, lon = loc?.second))
+            repo.generateWorkout(GenerateRequest(type = type, request = instruction.takeIf { it.isNotBlank() }, lat = loc?.first, lon = loc?.second))
         }.onFailure { error.value = it.message }
         generating.value = false
         load()
@@ -450,15 +458,15 @@ class HomeViewModel @Inject constructor(
 
     // Unified regenerate: if a workout exists and the user typed a tweak, revise it
     // with that instruction; otherwise generate a fresh one (weather-aware).
-    fun regenerate(tweak: String) = viewModelScope.launch {
+    fun regenerate(tweak: String, type: String = "auto") = viewModelScope.launch {
         val base = summary.value?.today_workout?.workout_json
         generating.value = true
         runCatching {
             if (base != null && tweak.isNotBlank()) {
-                repo.adjustWorkout(base, tweak, LocalDate.now().toString())
+                repo.adjustWorkout(base, tweak, LocalDate.now().toString(), type)
             } else {
                 val loc = location.lastKnown()
-                repo.generateWorkout(GenerateRequest(type = "auto", lat = loc?.first, lon = loc?.second))
+                repo.generateWorkout(GenerateRequest(type = type, request = tweak.takeIf { it.isNotBlank() }, lat = loc?.first, lon = loc?.second))
             }
         }.onFailure { error.value = it.message }
         generating.value = false
@@ -580,6 +588,18 @@ class HomeViewModel @Inject constructor(
             // the same bug as losing a rating.
             .onFailure { queueFeedback(date, null, null, today.id, false, null) }
         submittingFeedback.value = false
+    }
+
+    fun markUndone() = viewModelScope.launch {
+        if (!submittingFeedback.compareAndSet(false, true)) return@launch
+        try {
+            val workout = summary.value?.today_workout ?: return@launch
+            runCatching { repo.undoSkip(workout.id) }
+                .onSuccess { feedbackStatus.value = "Marked as not done"; load() }
+                .onFailure { feedbackStatus.value = "Couldn't update: ${it.message}" }
+        } finally {
+            submittingFeedback.value = false
+        }
     }
 
     fun undoSkip() = viewModelScope.launch {

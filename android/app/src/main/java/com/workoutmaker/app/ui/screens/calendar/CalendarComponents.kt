@@ -243,7 +243,7 @@ internal fun WeekSummaryCard(
                 nonRest.sortedBy { it.date }.forEach { w ->
                     val note = w.workout_json.coach_note
                     Column(Modifier.padding(top = 4.dp)) {
-                        Text("${w.date} · ${w.workout_json.title}", style = MaterialTheme.typography.labelMedium)
+                        Text("${w.date} · session ${w.session_slot + 1} · ${w.workout_json.title}", style = MaterialTheme.typography.labelMedium)
                         if (note.isNotBlank()) {
                             Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -417,6 +417,7 @@ internal fun DayPeekSheet(
     strength: List<WorkoutEntity>,
     activities: List<CompletedActivity>,
     onDismiss: () -> Unit,
+    onMarkUndone: (String) -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -448,6 +449,9 @@ internal fun DayPeekSheet(
                         color = if (w.completed) MaterialTheme.colorScheme.primary else typeColor(w.type),
                     )
                     Text(workout.title, style = MaterialTheme.typography.titleMedium)
+                    if (w.completed) {
+                        TextButton(onClick = { onMarkUndone(w.id) }) { Text("Mark as not done") }
+                    }
                     ChipRow(
                         buildList {
                             if (workout.duration_minutes > 0) add("${workout.duration_minutes.toInt()} min")
@@ -566,7 +570,7 @@ internal fun WeekAgenda(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(6.dp).background(typeColor(w.type), CircleShape))
                             Text(
-                                "  " + w.workout_json.title,
+                                "  Session ${w.session_slot + 1} · " + w.workout_json.title,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (w.completed) MaterialTheme.colorScheme.onSurfaceVariant
                                 else MaterialTheme.colorScheme.onSurface,

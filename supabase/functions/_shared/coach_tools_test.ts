@@ -49,7 +49,7 @@ Deno.test("coach tools: new tools are advertised to the model", () => {
 
 Deno.test("executeTool get_fitness: leads with an interpreted word, keeps the raw figures", async () => {
   const admin = adminStub({
-    completed_activities: [
+    effective_activities: [
       { date: "2026-06-29", tss: 50, ctl: 42, atl: 50 },
       { date: "2026-06-22", tss: 60, ctl: 41, atl: 48 },
     ],
@@ -232,7 +232,7 @@ Deno.test("set_training_pause: writes the pause window and clears upcoming unloc
           },
         };
       }
-      // planned_workouts: chain of eq/gte/lte/neq, resolves to two clearable rows.
+      // reconciled_session_plans: chain of eq/gte/lte/neq, resolves to two clearable rows.
       const rows = [{ id: "w1", type: "run" }, { id: "w2", type: "strength" }];
       const chain: Any = {};
       for (const m of ["select", "eq", "gte", "lte", "neq"]) chain[m] = () => chain;
@@ -326,7 +326,7 @@ const FIT_ATHLETE = {
       goals: ["Marathon pace", "Build muscle"],
     },
   }],
-  completed_activities: Array.from({ length: 16 }, (_, i) => ({
+  effective_activities: Array.from({ length: 16 }, (_, i) => ({
     date: `2026-07-${String(i + 1).padStart(2, "0")}`,
     distance_m: 14_000,
     duration_seconds: 4200,
@@ -400,7 +400,7 @@ Deno.test("set_goal_race rejects a malformed date rather than writing junk", asy
 Deno.test("saving a goal returns the feasibility verdict with it", async () => {
   const s = writeStub({
     user_profiles: [{ onboarding: {} }],
-    completed_activities: [{ date: "2026-07-20", distance_m: 5_000, duration_seconds: 1800, ctl: 8 }],
+    effective_activities: [{ date: "2026-07-20", distance_m: 5_000, duration_seconds: 1800, ctl: 8 }],
     races: [],
   });
   // ~1.25km/week, longest 5km, and an Ironman six weeks out.
@@ -455,7 +455,7 @@ function withIronman(races = [IRONMAN, MARATHON]) {
   return writeStub({
     user_profiles: [{ onboarding: { goal: "Marathon pace", goal_date: IRONMAN.date } }],
     races,
-    completed_activities: [],
+    effective_activities: [],
   });
 }
 
@@ -505,7 +505,7 @@ Deno.test("a dangling anchor is cleared when the athlete names its date", async 
   const s = writeStub({
     user_profiles: [{ onboarding: { goal: "Marathon pace", goal_date: "2027-10-03" } }],
     races: [],
-    completed_activities: [],
+    effective_activities: [],
   });
   const obs = JSON.parse(
     await executeTool(s.admin, "u1", "auth", "remove_goal_race", { date: "2027-10-03" }),
@@ -522,7 +522,7 @@ Deno.test("removing an unrelated race never moves the anchor", async () => {
   const s = writeStub({
     user_profiles: [{ onboarding: { goal: "Marathon pace", goal_date: "2027-10-03" } }],
     races: [MARATHON],
-    completed_activities: [],
+    effective_activities: [],
   });
   const obs = JSON.parse(
     await executeTool(s.admin, "u1", "auth", "remove_goal_race", { name: "February Marathon" }),
@@ -603,7 +603,7 @@ Deno.test("goalTextFor never lets a longer event swallow a shorter one", () => {
 Deno.test("a goal whose distance is a target time still gets a real verdict", async () => {
   const s = writeStub({
     user_profiles: [{ onboarding: {} }],
-    completed_activities: [{ date: "2026-07-20", distance_m: 5_000, duration_seconds: 1800, ctl: 8 }],
+    effective_activities: [{ date: "2026-07-20", distance_m: 5_000, duration_seconds: 1800, ctl: 8 }],
     races: [],
   });
   const obs = JSON.parse(await executeTool(s.admin, "u1", "auth", "set_goal_race", {
@@ -648,7 +648,7 @@ Deno.test("dateError distinguishes missing from malformed", () => {
 });
 
 Deno.test("generate_workout refuses to schedule into the past", async () => {
-  const s = writeStub({ user_profiles: [{ onboarding: {} }], planned_workouts: [] });
+  const s = writeStub({ user_profiles: [{ onboarding: {} }], reconciled_session_plans: [] });
   const obs = await executeTool(
     s.admin, "u1", "auth", "generate_workout", { date: "2026-07-25" }, "2026-07-26",
   );
@@ -657,7 +657,7 @@ Deno.test("generate_workout refuses to schedule into the past", async () => {
 });
 
 Deno.test("set_rest_day and move_workout refuse the past too", async () => {
-  const s = writeStub({ planned_workouts: [] });
+  const s = writeStub({ reconciled_session_plans: [] });
   for (const [tool, args] of [
     ["set_rest_day", { date: "2026-07-01" }],
     ["move_workout", { workout_id: "w1", new_date: "2026-07-01" }],
@@ -671,7 +671,7 @@ Deno.test("with no client date, a day of slack is allowed rather than a wrong re
   // The server runs in UTC and the athlete may not. Without a client-supplied
   // today, refusing strictly would reject a legitimate "today" for anyone in a
   // timezone behind UTC, which is worse than accepting one stale day.
-  const s = writeStub({ planned_workouts: [] });
+  const s = writeStub({ reconciled_session_plans: [] });
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   const obs = await executeTool(s.admin, "u1", "auth", "set_rest_day", { date: yesterday });
   assert(!obs.startsWith("error:"), `slack date should be accepted, got ${obs}`);
@@ -692,7 +692,7 @@ Deno.test("with no client date, a day of slack is allowed rather than a wrong re
 Deno.test("make_easier keeps the session's sport instead of regenerating freely", async () => {
   let sentType: unknown = "NOT SENT";
   const s = writeStub({
-    planned_workouts: [{ id: "w1", type: "run", workout_json: { title: "Easy Run with Strides" } }],
+    reconciled_session_plans: [{ id: "w1", type: "run", workout_json: { title: "Easy Run with Strides" } }],
   });
   const origFetch = globalThis.fetch;
   globalThis.fetch = ((_u: string | URL | Request, init?: RequestInit) => {
@@ -717,7 +717,7 @@ Deno.test("make_easier keeps the session's sport instead of regenerating freely"
 });
 
 Deno.test("make_easier refuses a day with nothing planned instead of inventing one", async () => {
-  const s = writeStub({ planned_workouts: [] });
+  const s = writeStub({ reconciled_session_plans: [] });
   const obs = await executeTool(s.admin, "u1", "auth", "make_easier", { date: "2026-07-27" }, "2026-07-26");
   assert(obs.startsWith("error:"), obs);
   assert(obs.includes("nothing is planned"), obs);
@@ -725,7 +725,7 @@ Deno.test("make_easier refuses a day with nothing planned instead of inventing o
 
 Deno.test("plan_week reports the real days, not just how many", async () => {
   const s = writeStub({
-    planned_workouts: [
+    reconciled_session_plans: [
       { date: "2026-07-27", type: "run", workout_json: { title: "Easy Run" } },
       { date: "2026-07-28", type: "strength", workout_json: { title: "Full Body" } },
     ],
@@ -753,7 +753,7 @@ Deno.test("plan_week reports the real days, not just how many", async () => {
 
 Deno.test("plan_week still accepts the current week's Monday, which is in the past", async () => {
   // A week legitimately starts before today; only the FORMAT is enforced.
-  const s = writeStub({ planned_workouts: [] });
+  const s = writeStub({ reconciled_session_plans: [] });
   const origFetch = globalThis.fetch;
   globalThis.fetch = (() =>
     Promise.resolve(new Response(JSON.stringify({ scheduled: 0 }), {
@@ -777,7 +777,7 @@ Deno.test("get_planned_week says where each day sits relative to today", async (
   // told the athlete it was "tomorrow". A week starts on Monday, so by Sunday
   // most of it is history and bare dates were not enough to stop that.
   const s = writeStub({
-    planned_workouts: [
+    reconciled_session_plans: [
       { id: "a", date: "2026-07-20", type: "run", completed: true, locked: false, workout_json: { title: "Easy Run" } },
       { id: "b", date: "2026-07-26", type: "ride", completed: false, locked: false, workout_json: { title: "Long Ride" } },
       { id: "c", date: "2026-07-27", type: "strength", completed: false, locked: false, workout_json: { title: "Full Body" } },
@@ -792,7 +792,7 @@ Deno.test("get_planned_week says where each day sits relative to today", async (
 
 Deno.test("get_planned_week's default week is anchored to the athlete's date", async () => {
   // mondayOf() read the SERVER clock, which is UTC and not the athlete's day.
-  const s = writeStub({ planned_workouts: [] });
+  const s = writeStub({ reconciled_session_plans: [] });
   const obs = JSON.parse(
     await executeTool(s.admin, "u1", "auth", "get_planned_week", {}, "2026-07-26"),
   );
@@ -811,7 +811,7 @@ Deno.test("get_planned_week's default week is anchored to the athlete's date", a
 
 Deno.test("set_rest_day names what it deleted instead of counting it", async () => {
   const s = writeStub({
-    planned_workouts: [
+    reconciled_session_plans: [
       { id: "w1", type: "run", workout_json: { title: "Easy Run with Strides" } },
     ],
   });
@@ -835,7 +835,7 @@ Deno.test("set_rest_day names what it deleted instead of counting it", async () 
 
 Deno.test("every calendar write reports week_now", async () => {
   const s = writeStub({
-    planned_workouts: [{ id: "w1", type: "run", workout_json: { title: "Easy Run" } }],
+    reconciled_session_plans: [{ id: "w1", type: "run", workout_json: { title: "Easy Run" } }],
   });
   const origFetch = globalThis.fetch;
   globalThis.fetch = (() =>
@@ -1108,4 +1108,92 @@ Deno.test("get_profile: surfaces injury follow-up state and active backoffs", as
   assertEquals(obs.injury_status[0].status, "present");
   assertEquals(obs.injury_backoff.length, 1, "expired backoffs must not be reported as in force");
   assertEquals(obs.injury_backoff[0].area, "Knee");
+});
+
+
+Deno.test("plan_week pins local week and forwards local today when args are empty", async () => {
+  const s = writeStub({reconciled_session_plans:[{date:"2026-10-27",type:"run",workout_json:{title:"Easy run"}}]});
+  const original = globalThis.fetch;
+  let sent: Any;
+  globalThis.fetch = ((_url: Any, init: Any) => {
+    sent = JSON.parse(init.body);
+    return Promise.resolve(new Response(JSON.stringify({scheduled:1})));
+  }) as typeof fetch;
+  try {
+    const result = JSON.parse(await executeTool(s.admin,"u","auth","plan_week",{},"2026-10-27"));
+    assertEquals(sent.start_date,"2026-10-26");
+    assertEquals(sent.today,"2026-10-27");
+    assertEquals(result.week_start,"2026-10-26");
+    assertEquals(result.ok,true);
+  } finally { globalThis.fetch = original; }
+});
+
+Deno.test("plan_week rejects HTTP errors, empty responses and zero writes even with existing sessions", async () => {
+  const s = writeStub({reconciled_session_plans:[{date:"2026-10-27",type:"run",workout_json:{title:"Old run"}}]});
+  const original = globalThis.fetch;
+  try {
+    for (const [status, body] of [[502,"upstream unavailable"],[401,JSON.stringify({message:"Invalid JWT"})],[200,"{}"],[200,JSON.stringify({scheduled:0})]] as const) {
+      globalThis.fetch = (() => Promise.resolve(new Response(body,{status}))) as typeof fetch;
+      const result = JSON.parse(await executeTool(s.admin,"u","auth","plan_week",{},"2026-10-27"));
+      assertEquals(result.ok,false);
+      assert(result.error);
+    }
+  } finally { globalThis.fetch = original; }
+});
+
+Deno.test("plan_week requires saved calendar rows, not only a count", async () => {
+  const s = writeStub({reconciled_session_plans:[]});
+  const original = globalThis.fetch;
+  globalThis.fetch = (() => Promise.resolve(new Response(JSON.stringify({scheduled:3})))) as typeof fetch;
+  try {
+    const result = JSON.parse(await executeTool(s.admin,"u","auth","plan_week",{},"2026-10-27"));
+    assertEquals(result.ok,false);
+    assert(result.error.includes("verified"));
+  } finally { globalThis.fetch = original; }
+});
+
+Deno.test("generate_workout pins the athlete's local date when args are empty", async () => {
+  const s = writeStub({reconciled_session_plans:[]});
+  const original = globalThis.fetch;
+  let sent: Any;
+  globalThis.fetch = ((_url: Any, init: Any) => {
+    sent=JSON.parse(init.body);
+    return Promise.resolve(new Response(JSON.stringify({workout_id:"new",workout:{title:"Easy run"}})));
+  }) as typeof fetch;
+  try {
+    const result=JSON.parse(await executeTool(s.admin,"u","auth","generate_workout",{},"2026-10-27"));
+    assertEquals(sent.date,"2026-10-27");
+    assertEquals(sent.today,"2026-10-27");
+    assertEquals(result.ok,true);
+  } finally { globalThis.fetch=original; }
+});
+
+Deno.test("get_today_plan reads the local date and returns the saved instructions without a generation call", async () => {
+  const queries:Any[]=[];
+  const saved={id:"existing",date:"2026-10-27",type:"strength",session_slot:0,completed:false,skipped:false,workout_json:{title:"Existing strength",sections:[{name:"Main",exercises:[{name:"Squat",sets:3,reps:"8"}]}]}};
+  const base=adminStub({reconciled_session_plans:[saved]});
+  const admin={from:(table:string)=>{const chain=base.from(table);chain.eq=(key:string,value:unknown)=>{queries.push([key,value]);return chain};return chain}};
+  const result=JSON.parse(await executeTool(admin as Any,"owner","auth","get_today_plan",{},"2026-10-27"));
+  assertEquals(result.today,"2026-10-27");assertEquals(result.sessions[0].id,"existing");
+  assertEquals(result.sessions[0].workout,saved.workout_json);
+  assert(queries.some(([key,value])=>key==="date"&&value==="2026-10-27"));
+});
+
+Deno.test("a saved workout with queued watch delivery remains a successful calendar action", async () => {
+  const original=globalThis.fetch;
+  let sent:Any;
+  globalThis.fetch=((_url:Any,init:Any)=>{sent=JSON.parse(init.body);return Promise.resolve(new Response(JSON.stringify({workout_id:"saved",workout:{title:"Swim"},push_error:"provider unavailable"})))}) as typeof fetch;
+  try {
+    const result=JSON.parse(await executeTool(adminStub({}),"u","auth","generate_workout",{type:"swim",session_slot:1},"2026-10-27"));
+    assertEquals(result.ok,true);assertEquals(result.calendar_saved,true);assertEquals(result.delivery,"pending");
+    assertEquals(sent.type,"swim");assertEquals(sent.session_slot,1);
+    const schema=TOOL_CATALOG.find(t=>t.name==="generate_workout")!.schema as Any;
+    assert(schema.properties.type.enum.includes("ride"));assert(schema.properties.type.enum.includes("swim"));
+  } finally {globalThis.fetch=original}
+});
+
+Deno.test("coach profile exposes the same planning preferences the workout engine uses", async () => {
+ const onboarding={sports:["run","strength"],primary_sport:"run",implements:["dumbbells"],weekly_minutes_max:180,session_windows:[{day:"Tue",slot:0,start_minute:420,max_minutes:30}],prescription_engine:"deterministic",training_history_confirmed:true,automatic_event_preparation:false,event_policies:{run:{days:3,duration_factor:0.8,allow_quality:false}}};
+ const result=JSON.parse(await executeTool(adminStub({user_profiles:[{onboarding}]}),"owner","auth","get_profile",{},"2026-10-27"));
+ for(const key of ["sports","primary_sport","implements","weekly_minutes_max","session_windows","prescription_engine","training_history_confirmed","automatic_event_preparation","event_policies"] as const) assertEquals(result[key],onboarding[key]);
 });

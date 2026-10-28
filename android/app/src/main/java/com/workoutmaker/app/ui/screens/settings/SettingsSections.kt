@@ -305,6 +305,32 @@ private fun SportDetail(sport: String, profile: TrainingProfile, vm: SettingsVie
             // button, because a goal chip tapped here would silently lose to the
             // distance target on save. There is nothing to lose to now: it is the
             // same control writing the same fields.
+            ChipGroup("Program objective", if (sport == "strength") listOf("fitness", "strength", "hypertrophy", "return") else listOf("fitness", "performance", "technique", "return"), profile.program_objectives[sport] ?: "fitness") { objective ->
+                vm.updateProfile { it.copy(program_objectives = it.program_objectives + (sport to objective)) }
+            }
+            val venues = when (sport) {
+                "run" -> listOf("unspecified", "road", "trail", "treadmill")
+                "ride" -> listOf("unspecified", "road", "gravel", "mtb", "indoor")
+                "swim" -> listOf("pool", "open_water")
+                else -> emptyList()
+            }
+            if (venues.isNotEmpty()) ChipGroup("Training venue", venues, profile.venues[sport] ?: if (sport == "swim") "pool" else "unspecified") { venue ->
+                vm.updateProfile { it.copy(venues = it.venues + (sport to venue)) }
+            }
+            if (sport == "swim") {
+                OpenWaterControls(profile) { f -> vm.updateProfile(f) }
+                val pool = profile.pool ?: com.workoutmaker.app.data.PoolProfile()
+                NumberField(profile.pool?.length?.toString() ?: "", { value ->
+                    vm.updateProfile { it.copy(pool = value.toIntOrNull()?.takeIf { n -> n > 0 }?.let { n -> pool.copy(length = n) }) }
+                }, label = "Pool length")
+                NumberField(pool.seconds_per_length?.toString() ?: "", { value ->
+                    vm.updateProfile { it.copy(pool = pool.copy(seconds_per_length = value.toDoubleOrNull()?.takeIf { n -> n > 0 && n <= 600 })) }
+                }, label = "Comfortable seconds per pool length (optional)")
+                ChipGroup("Pool units", listOf("m", "yd"), pool.unit) { unit -> vm.updateProfile { it.copy(pool = pool.copy(unit = unit)) } }
+                ChipGroup("Comfortable stroke", listOf("freestyle", "backstroke", "breaststroke"), pool.strokes.firstOrNull()) { stroke ->
+                    vm.updateProfile { it.copy(pool = pool.copy(strokes = listOf(stroke))) }
+                }
+            }
             when {
                 EnduranceGoals.isEndurance(sport) ->
                     EnduranceSportQuestions(sport, profile) { f -> vm.updateProfile(f) }
@@ -374,20 +400,46 @@ internal fun TrainingWeekSection(vm: SettingsViewModel) {
         SectionLabel("Your week")
         WeekPreviewBars(profile.day_availability)
     }
-    // WeeklyAvailabilityEditor renders its own Schedule + Session length cards.
+    SectionCard {
+        SectionLabel("Your coach")
+        Text("Choose your priorities and available time. Your coach fits the week around completed training, recovery and recorded restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        PlanningChoiceGroup("Main focus", profile.sports.filter { it in listOf("run", "ride", "swim", "strength") }, profile.primary_sport) { sport ->
+            vm.updateProfile { it.copy(primary_sport = sport) }
+        }
+        ToggleRow("My recent training is up to date", "Recorded and manual activities represent my last four weeks. Missing history keeps new workouts conservative.", profile.training_history_confirmed) { confirmed ->
+            vm.updateProfile { it.copy(training_history_confirmed = confirmed) }
+        }
+        NumberField(profile.weekly_minutes_max?.toString() ?: "", { value ->
+            vm.updateProfile { it.copy(weekly_minutes_max = value.toIntOrNull()?.takeIf { n -> n >= 0 }) }
+        }, label = "Weekly time limit in minutes (optional)")
+        Text("Time limits are ceilings. Sessions may be shorter while you build consistency.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     WeeklyAvailabilityEditor(profile.day_availability) { list -> vm.updateProfile { it.copy(day_availability = list) } }
     SectionCard {
-        SectionLabel("Progression")
+        SectionLabel("Progression and recovery")
         PeriodizationControl(
             periodized = profile.periodized,
-            onChange = { p -> vm.updateProfile { it.copy(periodized = p) } },
+            onChange = { p -> vm.updateProfile { Periodization.configure(it, p) } },
             weeklyTssTarget = profile.weekly_tss_target,
         )
+        Text(if (profile.automatic_event_preparation) "Goal races automatically guide preparation. You don't need to configure a separate taper." else "Automatic race preparation is off in advanced program options.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        PlanningChoiceGroup("On recovery days", listOf("rest", "mobility", "optional_light", "active_recovery"), profile.recovery_day_style) { value ->
+            vm.updateProfile { it.copy(recovery_day_style = value) }
+        }
     }
-    SectionCard {
-        SectionLabel("8-week forecast")
+    PlanningControls(profile) { f -> vm.updateProfile(f) }
+    PlanningDetailsCard("Workout generation options", if (profile.prescription_engine == "deterministic") "Structured workouts" else "AI-proposed workouts") {
+        ToggleRow("Structured workouts", "Use consistent workout recipes. Turn off for AI proposals. Both are checked against your training restrictions.",
+            profile.prescription_engine == "deterministic") { enabled ->
+            vm.updateProfile { it.copy(prescription_engine = if (enabled) "deterministic" else "model") }
+        }
+        Text("Custom written requests can still use the coach with structured workouts enabled.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    PlanningDetailsCard("Training load illustration", "Eight-week example, not your scheduled workouts") {
+        Text("This chart illustrates a load pattern using your TSS target. Actual workouts are rebuilt from completed training and feedback; the structured planner does not follow these exact numbers.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PeriodizationNumbers(profile.weekly_tss_target, profile.periodized, showHeading = false)
     }
+    Text("Save these preferences, then generate or adjust your week to use them.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     SaveProfileButton(vm)
 }
 
