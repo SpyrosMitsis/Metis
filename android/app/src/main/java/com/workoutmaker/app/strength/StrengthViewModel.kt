@@ -1,5 +1,7 @@
 package com.workoutmaker.app.strength
 
+import com.workoutmaker.app.util.runCatching
+
 import android.content.Context
 import android.os.Build
 import android.os.VibrationEffect
@@ -44,6 +46,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import com.workoutmaker.app.data.cachedPlannedWorkouts
+import com.workoutmaker.app.data.undoSkip
 import com.workoutmaker.app.data.plannedWorkouts
 
 
@@ -69,6 +72,7 @@ class StrengthViewModel @Inject constructor(
     // When set, this session was opened from a planned calendar workout; on
     // finish we mark that plan complete (#: "auto-done when I press finish").
     private var linkedPlannedId: String? = null
+    private var prescribedTargets = false
     private var linkedPlannedDate: String? = null
 
     // A planned session waiting on the user's call to discard an in-progress
@@ -100,6 +104,25 @@ class StrengthViewModel @Inject constructor(
     // Today's planned strength sessions from the calendar, shown on the
     // Strength home so the plan is one tap from the logger.
     val todayPlanned = MutableStateFlow<List<PlannedWorkout>>(emptyList())
+
+    val undoingPlanned = MutableStateFlow<String?>(null)
+
+    fun markPlannedUndone(id: String) = viewModelScope.launch {
+        if (!undoingPlanned.compareAndSet(null, id)) return@launch
+        try {
+            runCatching { workoutRepo.undoSkip(id) }
+                .onSuccess {
+                    todayPlanned.value = todayPlanned.value.map {
+                        if (it.id == id) it.copy(completed = false, skipped = false) else it
+                    }
+                    status.value = "Marked as not done"
+                    loadHome()
+                }
+                .onFailure { status.value = "Couldn't update: ${it.message}" }
+        } finally {
+            undoingPlanned.value = null
+        }
+    }
 
     /** Start logging a planned calendar session from the Strength home card. */
     fun startPlannedFromHome(w: PlannedWorkout) {
@@ -138,6 +161,9 @@ class StrengthViewModel @Inject constructor(
     val history = MutableStateFlow<List<WorkoutEntity>>(emptyList())
     val workoutDetail = MutableStateFlow<WorkoutDetailUi?>(null)
     val routines = MutableStateFlow<List<RoutineWithItems>>(emptyList())
+    val exerciseSummaries = MutableStateFlow<Map<String, ExerciseLogSummary>>(emptyMap())
+    val hiddenExerciseStats = MutableStateFlow<Set<String>>(emptySet())
+    val statsMessage = MutableStateFlow<String?>(null)
     val loggedExercises = MutableStateFlow<List<String>>(emptyList())
     // Per-exercise stats live in `catalog` (see StrengthCatalog.kt) — this is a
     // read-only pass-through so no Composable call site needs to change.
@@ -148,6 +174,8 @@ class StrengthViewModel @Inject constructor(
     // Restore any in-progress session left behind by a lock/kill — done here,
     // AFTER every property it touches (status, exercises, rest fields…) is
     // initialised, and synchronously so the workout is ready on first frame.
+    private val snapshotFile = SessionSnapshotFile(File(context.filesDir, "active_session.json"))
+
     init { restoreSavedSession() }
 
     // Observe the Calendar → Strength handoffs: opening the tab with a pending
@@ -207,22 +235,12 @@ class StrengthViewModel @Inject constructor(
                 prefs.setCustomsCleanupV1Done()
                 if (tidied > 0) status.value = "Tidied $tidied exercise name(s) to match the catalog"
             }
-            val restored = runCatching { repo.restoreIfEmpty() }.getOrElse {
-                // Only reachable when local history is empty (post-reinstall), so
-                // an empty screen here would silently mask un-restored history.
-                // Log it: a decode failure here (not just a network blip) was
-                // invisible before and looked like a connection problem.
-                Log.w("StrengthVM", "restoreIfEmpty failed", it)
-                status.value = "Couldn't restore your history from the cloud, check your connection and reopen this tab"
-                0
-            }
-            if (restored > 0) status.value = "Restored $restored workouts from the cloud"
-            // Two-way sync: pull in sessions logged elsewhere (e.g. the web app).
-            val merged = repo.mergeFromCloud()
-            if (merged > 0) status.value = "Synced $merged new workout(s) from the cloud"
+            runCatching { repo.mergeFromCloud() }
+                .onSuccess { merged -> if (merged > 0) status.value = "Synced $merged new workout(s) from the cloud" }
+                .onFailure { status.value = "Couldn't refresh cloud history. Showing your saved workouts." }
             history.value = repo.recentWorkouts()
             routines.value = repo.routines()
-            loggedExercises.value = repo.loggedExercises()
+            refreshStatsIndex()
             weeklyReport.value = repo.weeklyReport()
             pendingSync.value = repo.pendingSyncCount()
         }
@@ -251,9 +269,35 @@ class StrengthViewModel @Inject constructor(
         requestSync()
     }
 
+    private suspend fun refreshStatsIndex() {
+        loggedExercises.value = repo.loggedExercises()
+        exerciseSummaries.value = repo.exerciseLogSummaries().associateBy { it.name }
+        hiddenExerciseStats.value = repo.hiddenExerciseStats()
+    }
+
+    fun loadStatsIndex() = viewModelScope.launch {
+        statsMessage.value = null
+        runCatching { catalog.loadPicker(); refreshStatsIndex() }
+            .onFailure { statsMessage.value = "Could not refresh exercise stats." }
+    }
+
+    fun restoreExerciseStats(name: String) = viewModelScope.launch {
+        runCatching { repo.restoreExerciseStats(name); refreshStatsIndex() }
+            .onSuccess { statsMessage.value = "Exercise stats restored." }
+            .onFailure { statsMessage.value = "Could not restore the exercise to stats." }
+    }
+
     fun deleteCustomExercise(name: String) = viewModelScope.launch {
-        catalog.deleteCustomExercise(name)
-        requestSync()
+        if (ExerciseCatalog.all.any { it.name == name } && !ExerciseCatalog.isCustom(name)) return@launch
+        runCatching { catalog.deleteCustomExercise(name); requestSync(); refreshStatsIndex() }
+            .onSuccess {
+                statsMessage.value = "Custom entry removed. Workout history kept."
+                status.value = statsMessage.value
+            }
+            .onFailure {
+                statsMessage.value = "Could not delete the custom entry. Try again."
+                status.value = statsMessage.value
+            }
     }
 
     fun createProgram(p: StrengthProgram) = viewModelScope.launch {
@@ -284,6 +328,7 @@ class StrengthViewModel @Inject constructor(
         editingWorkoutId = null
         editingEndedAt = 0L
         linkedPlannedId = null
+        prescribedTargets = false
         linkedPlannedDate = null
         startedAt = System.currentTimeMillis()
         elapsedSec.value = 0
@@ -308,8 +353,9 @@ class StrengthViewModel @Inject constructor(
         startedAt = w.startedAt
         workoutName = w.name
         workoutNote = w.note
+        linkedPlannedId = w.plannedWorkoutId
         sets.groupBy { it.exerciseName }.forEach { (name, group) ->
-            val ux = UiExercise(name)
+            val ux = UiExercise(name).apply { quantityUnit = group.firstOrNull()?.quantityUnit ?: "reps" }
             group.sortedBy { it.idx }.forEach { s ->
                 ux.sets.add(UiSet(weight = kg(s.weightKg), reps = s.reps.toString(),
                     rpe = s.rpe?.toString() ?: "", done = true, warmup = s.isWarmup, note = s.note))
@@ -434,39 +480,36 @@ class StrengthViewModel @Inject constructor(
 
     // Pre-fill the active session from a structured Workout (AI lift or a plan).
     private fun seedFromWorkout(w: Workout) {
-        w.sections.forEach { sec ->
-            sec.exercises.forEach { e ->
-                // An AI-introduced exercise outside the catalog: register it as a
-                // custom entry with the AI's metadata so muscle grouping, stats
-                // and future pickers recognise it.
-                if (ExerciseCatalog.find(e.name) == null && e.name.isNotBlank()) {
-                    viewModelScope.launch {
-                        runCatching {
-                            repo.addCustomExercise(
-                                e.name,
-                                e.muscle ?: "Other",
-                                e.category ?: "Machine",
-                                e.compound ?: false,
-                            )
-                        }
-                    }
+        prescribedTargets = true
+        plannedExerciseGroups(w).forEach { group ->
+            val first = group.doses.first().exercise
+            if (ExerciseCatalog.find(group.name) == null && group.name.isNotBlank()) {
+                viewModelScope.launch { runCatching {
+                    repo.addCustomExercise(group.name, first.muscle ?: "Other", first.category ?: "Machine", first.compound ?: false)
+                } }
+            }
+            val ux = UiExercise(group.name)
+            group.doses.forEach { dose ->
+                val e = dose.exercise
+                ux.quantityUnit = when {
+                    Regex("metres|meters|yards").containsMatchIn(e.reps) -> "metres"
+                    Regex("sec|seconds").containsMatchIn(e.reps) -> "seconds"
+                    ux.isCardio -> "minutes"
+                    else -> ux.quantityUnit
                 }
-                val ux = UiExercise(e.name)
                 repeat(e.sets.coerceAtLeast(1)) {
                     ux.sets.add(UiSet(
-                        suggestedWeight = e.weight_kg?.let { wk -> kg(wk) } ?: "",
+                        suggestedWeight = e.weight_kg?.let { kg(it) } ?: "",
                         suggestedReps = Regex("\\d+").find(e.reps)?.value ?: "",
+                        warmup = dose.warmup,
                     ))
                 }
-                e.rest_seconds?.let { ux.restSec = it }
-                exercises.add(ux)
-                // History-based suggestion wins over the plan-prescribed weight so
-                // the ↗ target and the greyed placeholders always match.
-                viewModelScope.launch {
-                    ux.previous = repo.previousSets(e.name)
-                    applySuggestion(ux, repo.progressionFor(e.name))
-                }
+                if (!dose.warmup) e.rest_seconds?.let { ux.restSec = it }
             }
+            exercises.add(ux)
+            // A prescribed recovery/familiarization load wins over a heavier
+            // historical progression target. History is still visible as PREV.
+            viewModelScope.launch { runCatching { ux.previous = repo.previousSets(group.name) } }
         }
     }
 
@@ -474,7 +517,7 @@ class StrengthViewModel @Inject constructor(
     // linked so finishing marks the plan complete.
     private fun startPlanned(s: StrengthHandoff.Start) {
         reset()
-        workoutName = s.workout.title.ifBlank { "Planned Strength" }
+        workoutName = displayWorkoutTitle(s.workout).ifBlank { "Planned Strength" }
         linkedPlannedId = s.plannedId
         linkedPlannedDate = s.date
         seedFromWorkout(s.workout)
@@ -545,7 +588,7 @@ class StrengthViewModel @Inject constructor(
             if (s.reps.isBlank() && s.suggestedReps.isNotBlank()) s.reps = s.suggestedReps
             if (!ux.isCardio && s.weight.isBlank() && s.suggestedWeight.isNotBlank()) s.weight = s.suggestedWeight
             // With no suggestion either, there's still nothing to log (0×0 guard).
-            val needsWeight = !ux.isCardio && !s.warmup
+            val needsWeight = ux.needsWeight && !s.warmup
             if (s.reps.isBlank() || (needsWeight && s.weight.isBlank())) {
                 status.value = if (ux.isCardio) "Enter minutes before ticking the set"
                     else "Enter weight and reps before ticking the set"
@@ -562,22 +605,19 @@ class StrengthViewModel @Inject constructor(
 
     private var persistJob: Job? = null
 
-    /** Save the in-progress session to disk. Safe to call on every change (incl.
-     *  each keystroke): writes are debounced and atomic (temp file + rename) so
-     *  rapid calls coalesce and a kill mid-write can never corrupt the file. */
+    /** Coalesce edits; the revision guard also rejects writes already running
+     * when a newer save or discard was requested. */
     fun persistSession() {
-        val snapshot = snapshotSession() // read Compose state on the caller (main) thread
+        val snapshot = snapshotSession()
+        val revision = snapshotFile.nextRevision()
         persistJob?.cancel()
         persistJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(150)
             runCatching {
-                if (snapshot == null) {
-                    sessionFile.delete()
-                } else {
-                    val tmp = File(sessionFile.parentFile, "active_session.tmp")
-                    tmp.writeText(sessionJson.encodeToString(SavedSession.serializer(), snapshot))
-                    tmp.renameTo(sessionFile)
-                }
-            }
+                snapshotFile.write(revision, snapshot?.let {
+                    sessionJson.encodeToString(SavedSession.serializer(), it)
+                })
+            }.onFailure { Log.w("StrengthVM", "Session save failed", it) }
         }
     }
 
@@ -589,6 +629,7 @@ class StrengthViewModel @Inject constructor(
             workoutNote = workoutNote,
             startedAt = startedAt,
             linkedPlannedId = linkedPlannedId,
+            prescribedTargets = prescribedTargets,
             linkedPlannedDate = linkedPlannedDate,
             editingWorkoutId = editingWorkoutId,
             editingEndedAt = editingEndedAt,
@@ -597,7 +638,7 @@ class StrengthViewModel @Inject constructor(
             exercises = exercises.map { ux ->
                 SavedExercise(ux.name, ux.restSec, ux.sets.map {
                     SavedSet(it.weight, it.reps, it.rpe, it.done, it.warmup, it.note, it.suggestedWeight, it.suggestedReps)
-                })
+                }, ux.quantityUnit)
             },
         )
     }
@@ -608,20 +649,21 @@ class StrengthViewModel @Inject constructor(
      * killed before its coroutine runs, so on ON_STOP we write on the spot.
      */
     fun persistSessionNow() {
+        persistJob?.cancel()
+        val revision = snapshotFile.nextRevision()
         val snapshot = snapshotSession()
         runCatching {
-            if (snapshot == null) {
-                sessionFile.delete()
-            } else {
-                val tmp = File(sessionFile.parentFile, "active_session.tmp")
-                tmp.writeText(sessionJson.encodeToString(SavedSession.serializer(), snapshot))
-                tmp.renameTo(sessionFile)
-            }
-        }
+            snapshotFile.write(revision, snapshot?.let {
+                sessionJson.encodeToString(SavedSession.serializer(), it)
+            })
+        }.onFailure { Log.w("StrengthVM", "Session save failed", it) }
     }
 
     private fun clearSavedSession() {
-        viewModelScope.launch(Dispatchers.IO) { runCatching { sessionFile.delete() } }
+        persistJob?.cancel()
+        val revision = snapshotFile.nextRevision()
+        runCatching { snapshotFile.write(revision, null) }
+            .onFailure { Log.w("StrengthVM", "Session clear failed", it) }
     }
 
     // Read synchronously in init (the file is tiny) so nav/exercises are set
@@ -638,17 +680,18 @@ class StrengthViewModel @Inject constructor(
         workoutNote = saved.workoutNote
         startedAt = saved.startedAt
         linkedPlannedId = saved.linkedPlannedId
+        prescribedTargets = saved.prescribedTargets || saved.linkedPlannedId != null
         linkedPlannedDate = saved.linkedPlannedDate
         editingWorkoutId = saved.editingWorkoutId
         editingEndedAt = saved.editingEndedAt
         exercises.clear()
         saved.exercises.forEach { se ->
-            val ux = UiExercise(se.name).apply { restSec = se.restSec }
+            val ux = UiExercise(se.name).apply { restSec = se.restSec; quantityUnit = se.quantityUnit }
             se.sets.forEach { ss ->
                 ux.sets.add(UiSet(ss.weight, ss.reps, ss.rpe, ss.done, ss.warmup, ss.note, ss.suggestedWeight, ss.suggestedReps))
             }
             exercises.add(ux)
-            viewModelScope.launch { runCatching { ux.previous = repo.previousSets(se.name); applySuggestion(ux, repo.progressionFor(se.name)) } }
+            viewModelScope.launch { runCatching { ux.previous = repo.previousSets(se.name); if (!prescribedTargets) applySuggestion(ux, repo.progressionFor(se.name)) } }
         }
         nav.value = StrengthNav.Active
         startTick()
@@ -793,6 +836,7 @@ class StrengthViewModel @Inject constructor(
                         rpe = it.rpe.toIntOrNull(),
                         isWarmup = it.warmup,
                         note = it.note.trim(),
+                        quantityUnit = ux.quantityUnit,
                     )
                 },
             )
@@ -818,7 +862,7 @@ class StrengthViewModel @Inject constructor(
         val p = pendingFinish ?: run { nav.value = StrengthNav.Home; return }
         pendingFinish = null
         viewModelScope.launch {
-            runCatching { repo.finishWorkout(p.name, p.started, p.ended, p.exercises, p.note, p.editId) }
+            runCatching { repo.finishWorkout(p.name, p.started, p.ended, p.exercises, p.note, p.editId, p.linkedId) }
                 .onSuccess { result ->
                     lastPrs.value = result.prs
                     // Auto-complete the linked plan so the calendar reflects it.
@@ -838,6 +882,7 @@ class StrengthViewModel @Inject constructor(
                         .atZone(ZoneId.systemDefault()).toLocalDate().toString()
                     FeedbackSyncWorker.request(
                         context, date, rpe, difficulty, p.note.ifBlank { null },
+                        ownerUid = workoutRepo.auth.currentUserOrNull()?.id,
                     )
                 }
                 .onFailure { status.value = "Saved locally; sync failed: ${it.message}" }

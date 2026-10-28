@@ -6,7 +6,11 @@ import androidx.activity.compose.setContent
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
 import io.github.jan.supabase.gotrue.auth
-import io.github.jan.supabase.gotrue.handleDeeplinks
+import com.workoutmaker.app.util.runCatching
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import com.workoutmaker.app.ui.tutorial.FeatureTourHost
+import com.workoutmaker.app.ui.tutorial.FeatureTourViewModel
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -126,13 +130,10 @@ class MainActivity : ComponentActivity() {
                 }
             return
         }
-        supabase.handleDeeplinks(intent) { session ->
-            // The imported session may belong to a different user than the
-            // cached profile row (e.g. confirming a brand-new account).
-            repo.onSessionImported()
-            if (session.type == "recovery" || data.path?.contains("reset") == true) {
-                AuthDeepLinks.recoveryPending.value = true
-            }
+        lifecycleScope.launch {
+            runCatching { repo.importAuthLink(data) }
+                .onSuccess { recovery -> if (recovery) AuthDeepLinks.recoveryPending.value = true }
+                .onFailure { AuthDeepLinks.message.value = "That sign-in link could not be opened. Please try again." }
         }
     }
 
@@ -251,6 +252,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainScaffold() {
     val nav = rememberNavController()
+    val tour: FeatureTourViewModel = hiltViewModel()
+    val tourPending by tour.pending.collectAsState()
 
     // If a workout was in progress when the app was last closed/killed, START on
     // the Strength tab (not Home) so there's no Home→workout flash on launch.
@@ -395,8 +398,15 @@ private fun MainScaffold() {
                 val parentEntry = remember(backStackEntry) { nav.getBackStackEntry("strength") }
                 val vm: StrengthViewModel = hiltViewModel(parentEntry)
                 val logged by vm.loggedExercises.collectAsState()
+                val custom by vm.customExercises.collectAsState()
+                val summaries by vm.exerciseSummaries.collectAsState()
+                val hidden by vm.hiddenExerciseStats.collectAsState()
+                val statsMessage by vm.statsMessage.collectAsState()
+                LaunchedEffect(vm) { vm.loadStatsIndex() }
                 ExerciseStatsPickerScreen(
                     exercises = logged,
+                    customNames = custom.map { it.name }.toSet(), summaries = summaries, hiddenNames = hidden, message = statsMessage,
+                    onDeleteCustom = vm::deleteCustomExercise, onRestore = vm::restoreExerciseStats,
                     onPick = { exercise ->
                         val encoded = URLEncoder.encode(exercise, "UTF-8")
                         nav.navigate("exercise-stats/$encoded")
@@ -427,9 +437,25 @@ private fun MainScaffold() {
                 )
             }
             composable("settings") {
-                SettingsScreen(onOpenBodyHistory = { nav.navigate("body-history") { launchSingleTop = true } })
+                SettingsScreen(
+                    onOpenBodyHistory = { nav.navigate("body-history") { launchSingleTop = true } },
+                    onStartTour = { tour.start() },
+                )
             }
         }
+        }
+        if (tourPending) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                FeatureTourHost(
+                    onShowFeature = { route ->
+                        nav.navigate(route) {
+                            popUpTo(nav.graph.findStartDestination().id)
+                            launchSingleTop = true
+                        }
+                    },
+                    onDismiss = { tour.dismiss() },
+                )
+            }
         }
     }
 }

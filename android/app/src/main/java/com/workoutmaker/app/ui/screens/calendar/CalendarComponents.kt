@@ -243,7 +243,7 @@ internal fun WeekSummaryCard(
                 nonRest.sortedBy { it.date }.forEach { w ->
                     val note = w.workout_json.coach_note
                     Column(Modifier.padding(top = 4.dp)) {
-                        Text("${w.date} · ${w.workout_json.title}", style = MaterialTheme.typography.labelMedium)
+                        Text("${w.date} · session ${w.session_slot + 1} · ${w.workout_json.title}", style = MaterialTheme.typography.labelMedium)
                         if (note.isNotBlank()) {
                             Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -390,23 +390,15 @@ internal fun ActivityCard(act: CompletedActivity, planned: PlannedWorkout?, onCl
         if (meta.isNotEmpty()) ChipRow(meta)
         // Hint when this isn't what was on the plan that day.
         planned?.let { p ->
-            if (p.type != "rest" && !p.completed && !looksLike(p.type, act.type)) {
+            if (p.type != "rest" && !p.completed && act.planned_workout_id != p.id) {
                 Text("Off-plan, ${p.type} was scheduled", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
             }
         }
     }
 }
 
-internal fun looksLike(plannedType: String, actualType: String?): Boolean {
-    val a = (actualType ?: "").lowercase()
-    return when (plannedType.lowercase()) {
-        "run" -> a.contains("run") || a.contains("walk")
-        "ride" -> a.contains("ride") || a.contains("bike") || a.contains("cycl")
-        "swim" -> a.contains("swim")
-        "strength" -> a.contains("weight") || a.contains("strength") || a.contains("workout") || a.contains("gym")
-        else -> false
-    }
-}
+internal fun looksLike(plannedType: String, actualType: String?): Boolean =
+        com.workoutmaker.app.data.activityMatchesPlan(plannedType, actualType)
 
 /**
  * Long-press peek: what is on a day, without leaving the month.
@@ -425,6 +417,7 @@ internal fun DayPeekSheet(
     strength: List<WorkoutEntity>,
     activities: List<CompletedActivity>,
     onDismiss: () -> Unit,
+    onMarkUndone: (String) -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -456,6 +449,9 @@ internal fun DayPeekSheet(
                         color = if (w.completed) MaterialTheme.colorScheme.primary else typeColor(w.type),
                     )
                     Text(workout.title, style = MaterialTheme.typography.titleMedium)
+                    if (w.completed) {
+                        TextButton(onClick = { onMarkUndone(w.id) }) { Text("Mark as not done") }
+                    }
                     ChipRow(
                         buildList {
                             if (workout.duration_minutes > 0) add("${workout.duration_minutes.toInt()} min")
@@ -574,7 +570,7 @@ internal fun WeekAgenda(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(6.dp).background(typeColor(w.type), CircleShape))
                             Text(
-                                "  " + w.workout_json.title,
+                                "  Session ${w.session_slot + 1} · " + w.workout_json.title,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (w.completed) MaterialTheme.colorScheme.onSurfaceVariant
                                 else MaterialTheme.colorScheme.onSurface,

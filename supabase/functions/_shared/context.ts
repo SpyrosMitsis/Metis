@@ -1,3 +1,4 @@
+import { activityMatchesPlanned } from "./activity_matching.ts";
 // Shared athlete-context builders. Both the single-day generator and the weekly
 // planner use these so they reason from the same signals (consistency = a more
 // mature planner). Each helper is best-effort and returns "" / nulls on failure.
@@ -15,13 +16,15 @@ import {
   runHrZones,
   runPaceZones,
 } from "./intervals.ts";
-import { assessViability, getWeather } from "./weather.ts";
+import { assessViability, getWeather, type WeatherSnapshot } from "./weather.ts";
 import { paceToSec, paceZonesFromThreshold } from "./zones.ts";
 
 export type HrZone = { zone: string; min: number; max: number };
 
 export interface ActivityRow {
   type?: string | null;
+  planned_workout_id?: string | null;
+  link_source?: string | null;
   date?: string | null;
   distance_m?: number | null;
   tss?: number | null;
@@ -193,7 +196,7 @@ export async function fetchRecentDebriefs(
   const entries: DebriefEntry[] = [];
   try {
     const { data } = await admin
-      .from("completed_activities")
+      .from("effective_activities")
       .select("date, type, analysis_json")
       .eq("user_id", userId)
       .not("analysis_json", "is", null)
@@ -297,35 +300,46 @@ export async function adherenceBlock(
   acts28: ActivityRow[],
 ): Promise<string> {
   const { data: plannedRecent } = await admin
-    .from("planned_workouts")
-    .select("date, type, workout_json")
+    .from("reconciled_session_plans")
+    .select("id, date, type, workout_json, completed, skipped, reconciliation_status")
     .eq("user_id", userId)
     .gte("date", since14)
     .lt("date", beforeDate)
     .neq("type", "rest");
   if (!plannedRecent?.length) return "";
 
-  const completedByDate = new Set(acts28.map((a) => a.date));
-  const completedTss = acts28.filter((a) => (a.date ?? "") >= since14).reduce((s, a) => s + (a.tss ?? 0), 0);
+  // One recording can support at most one planned session. Explicit feedback
+  // takes precedence; consume its recording too so a second plan cannot reuse it.
+  const actual = acts28.filter((a) => (a.date ?? "") >= since14 && (a.date ?? "") < beforeDate);
+  const consumed = new Set<number>();
+  const completedTss = actual.reduce((sum, a) => sum + (a.tss ?? 0), 0);
   let plannedTss = 0;
-  let missed = 0;
-  const missedList: string[] = [];
-  for (const p of plannedRecent) {
+  let done = 0;
+  let matched = 0;
+  const skipped: string[] = [];
+  const unmatched: string[] = [];
+  const plans = [...plannedRecent].sort((a, b) => Number(!!b.completed) - Number(!!a.completed));
+  for (const p of plans) {
     plannedTss += Number((p.workout_json as { tss_estimate?: number })?.tss_estimate ?? 0);
-    if (!completedByDate.has(p.date)) {
-      missed++;
-      missedList.push(`${p.date} ${p.type}`);
+    if (p.skipped) {
+      skipped.push(`${p.date} ${p.type}`);
+      continue;
     }
+    const index = actual.findIndex((a, i) => !consumed.has(i) && a.planned_workout_id === p.id && p.id != null);
+    if (index >= 0) consumed.add(index);
+    if (p.completed || ["completed_as_planned", "modified", "substituted"].includes(p.reconciliation_status)) done++;
+    else if (index >= 0) matched++;
+    else unmatched.push(`${p.date} ${p.type}`);
   }
-  const done = plannedRecent.length - missed;
-  const pct = plannedRecent.length ? Math.round((done / plannedRecent.length) * 100) : 0;
   const volPct = plannedTss > 0 ? Math.round((completedTss / plannedTss) * 100) : null;
   return `\n\nADHERENCE (last 14 days, adapt to reality):\n` +
-    `- Completed ${done}/${plannedRecent.length} planned sessions (${pct}%)` +
-    (volPct != null ? `, ~${volPct}% of planned training load` : "") + ".\n" +
-    (missedList.length ? `- Missed: ${missedList.slice(0, 5).join("; ")}. If key sessions were missed, don't cram, rebuild gradually.\n` : "") +
-    (volPct != null && volPct < 70 ? "- Under-trained vs plan: hold or modestly reduce; rebuild consistency before progressing.\n" : "") +
-    (volPct != null && volPct > 120 ? "- Over-trained vs plan: bias easier to manage fatigue/injury risk.\n" : "");
+    `- ${done}/${plans.length} explicitly completed; ${matched} additional same-sport activity matches (dose not verified).\n` +
+    `- ${actual.length - consumed.size} other recorded activities; include their load even when they did not replace a planned session.\n` +
+    (skipped.length ? `- Explicitly skipped: ${skipped.slice(0, 5).join("; ")}.\n` : "") +
+    (unmatched.length ? `- No matching recording: ${unmatched.slice(0, 5).join("; ")}. Missing sync or unlogged training is possible; ask before assuming these were missed.\n` : "") +
+    (volPct != null ? `- Recorded activity load is ~${volPct}% of planned load; this is not a diagnosis of undertraining or overtraining.\n` : "") +
+    `- If sessions were missed, do not cram them into the remaining days. Use actual training, recovery and the reason for the change when adjusting.\n`;
+
 }
 
 // --- The athlete's dated goals -------------------------------------------
@@ -537,8 +551,8 @@ export function calendarBlock(raw: unknown): string {
     `\nPut the long/hard sessions on days with the most free time; on tight days keep the session short, and treat an all-day commitment as little-to-no training time (rest or a very short easy session). Never prescribe a specific clock time.`;
 }
 
-export async function weatherBlock(lat: number, lon: number, sport: "run" | "ride"): Promise<string> {
-  const wx = await getWeather(lat, lon);
+export async function weatherBlock(lat: number, lon: number, sport: "run" | "ride", supplied?: WeatherSnapshot | null): Promise<string> {
+  const wx = supplied === undefined ? await getWeather(lat, lon) : supplied;
   if (!wx) return "";
   const verdict = assessViability(wx, sport);
   const sportWord = sport === "ride" ? "cycling" : "running";

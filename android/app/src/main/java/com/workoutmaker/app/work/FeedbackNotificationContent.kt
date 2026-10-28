@@ -6,16 +6,8 @@ object FeedbackNotificationContent {
 
     // Same sport-matching the server uses when pairing a planned session with a
     // synced activity (see activityMatchesPlanned in _shared/analyze_core.ts).
-    fun typeLooksLike(plannedType: String, actualType: String?): Boolean {
-        val a = (actualType ?: "").lowercase()
-        return when (plannedType.lowercase()) {
-            "run" -> a.contains("run") || a.contains("walk")
-            "ride" -> a.contains("ride") || a.contains("bike") || a.contains("cycl")
-            "swim" -> a.contains("swim")
-            "strength" -> a.contains("weight") || a.contains("strength") || a.contains("workout") || a.contains("gym")
-            else -> false
-        }
-    }
+    fun typeLooksLike(plannedType: String, actualType: String?): Boolean =
+        com.workoutmaker.app.data.activityMatchesPlan(plannedType, actualType)
 
     // Title + text. With an analysis (label/feedback) the notification leads
     // with the coach's verdict; otherwise the plain "how did it feel?" ask.

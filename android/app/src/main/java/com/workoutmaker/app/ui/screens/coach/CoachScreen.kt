@@ -470,7 +470,7 @@ fun CoachContent(state: CoachState, on: CoachActions = CoachActions()) {
         // one out either way.
         val proposalTools = turnTools
         if (!revealing && messages.size > 1 && actionWeek == null && lastAction == null &&
-            proposalTools != null && !proposalTools.contains("get_planned_week") &&
+            proposalTools != null && proposalTools.none { it in setOf("get_planned_week", "get_today_plan") } &&
             looksLikeWorkoutProposal(lastAssistant)
         ) {
             Text(

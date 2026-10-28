@@ -1,5 +1,7 @@
 package com.workoutmaker.app.data
 
+import com.workoutmaker.app.util.runCatching
+
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
@@ -25,13 +27,13 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonArray
 
 // --- Strength logs -------------------------------------------------------
-suspend fun WorkoutRepository.logStrengthSet(log: StrengthLogInsert) {
+suspend fun WorkoutRepository.logStrengthSet(log: StrengthLogInsert) = withAccount {
     supabase.postgrest.from("strength_logs").insert(log)
 }
 
 // Fire-and-forget refresh of the rolling athlete "training memory".
 // Invalidates the profile cache so a following loadMemory() reads the new notes.
-suspend fun WorkoutRepository.refreshMemory() {
+suspend fun WorkoutRepository.refreshMemory() = withAccount {
     runCatching { supabase.functions.invoke("refresh-memory") }.logFailure("refreshMemory")
     invalidateProfileCache()
 }
@@ -73,11 +75,11 @@ suspend fun WorkoutRepository.coachConversations(): List<CoachConversation> =
         limit(100)
     }.decodeList()
 
-suspend fun WorkoutRepository.deleteCoachConversation(id: String) {
+suspend fun WorkoutRepository.deleteCoachConversation(id: String) = withAccount {
     supabase.postgrest.from("coach_conversations").delete { filter { eq("id", id) } }
 }
 
-suspend fun WorkoutRepository.setCoachConversationPinned(id: String, pinned: Boolean) {
+suspend fun WorkoutRepository.setCoachConversationPinned(id: String, pinned: Boolean) = withAccount {
     supabase.postgrest.from("coach_conversations")
         .update(mapOf("pinned" to JsonPrimitive(pinned))) { filter { eq("id", id) } }
 }
@@ -107,7 +109,7 @@ suspend fun WorkoutRepository.coachAgenticStream(
     // The coach narrated something, then decided to call a tool instead. What
     // was shown is no longer part of the answer, so drop it.
     onReset: () -> Unit = {},
-): CoachStreamResult {
+): CoachStreamResult = withAccount {
     val token = supabase.auth.currentSessionOrNull()?.accessToken
     val url = backend.url.trimEnd('/') + "/functions/v1/coach-chat"
     val payload = json.encodeToString(
@@ -166,7 +168,7 @@ suspend fun WorkoutRepository.coachAgenticStream(
     )
     // The coach may have evolved memory/soul server-side this turn.
     invalidateProfileCache()
-    return CoachStreamResult(convId, tools, error, gotReply, settingsChanges)
+    return@withAccount CoachStreamResult(convId, tools, error, gotReply, settingsChanges)
 }
 
 // Device settings the coach changed via chat (update_app_settings): apply

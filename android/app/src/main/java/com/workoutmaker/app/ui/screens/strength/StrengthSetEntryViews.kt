@@ -102,6 +102,10 @@ internal fun ExerciseCard(
                 Text(ux.name, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                 Text(ux.muscle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            TextButton(onClick = {
+                val units = listOf("reps", "seconds", "metres", "minutes")
+                if (ux.sets.none { it.done }) { ux.quantityUnit = units[(units.indexOf(ux.quantityUnit) + 1) % units.size]; vm.persistSession() }
+            }) { Text(ux.quantityUnit) }
             RestPicker(ux.restSec) { vm.setRest(ux, it) }
             Box {
                 IconButton(onClick = { menu = true }, modifier = Modifier.size(32.dp)) {
@@ -138,10 +142,10 @@ internal fun ExerciseCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HCell("SET", Modifier.width(30.dp)); HCell("PREV", Modifier.width(56.dp))
-            if (ux.isCardio) {
-                HCell("MIN", Modifier.weight(1f))
+            if (ux.isCardio || ux.isBand) {
+                HCell(if (ux.isCardio) "MIN" else ux.quantityUnit.uppercase(), Modifier.weight(1f))
             } else {
-                HCell("KG", Modifier.weight(1f)); HCell("REPS", Modifier.weight(1f))
+                HCell(if (ux.isBand) "BAND: NOTE" else if (ux.name.contains("assisted", true)) "ASSIST KG" else "KG", Modifier.weight(1f)); HCell(ux.quantityUnit.uppercase(), Modifier.weight(1f))
             }
             // Reserve the note + check columns (no labels) so the weighted headers
             // line up with the fields above the icons.
@@ -156,8 +160,8 @@ internal fun ExerciseCard(
             // onto the row that shifts into its slot).
             key(System.identityHashCode(s)) {
                 SetRow(
-                    label, s, ux.previous.getOrNull(i),
-                    cardio = ux.isCardio,
+                    label, s, ux.previous.getOrNull(i)?.takeIf { it.quantityUnit == ux.quantityUnit },
+                    cardio = ux.isCardio, noWeight = ux.isBand, quantityUnit = ux.quantityUnit,
                     onToggle = { vm.toggleDone(ux, s) },
                     onRemove = { vm.removeSet(ux, s) },
                     onEdit = { vm.persistSession() },
@@ -183,6 +187,8 @@ internal fun SetRow(
     s: UiSet,
     prev: SetEntity?,
     cardio: Boolean = false,
+    quantityUnit: String = "reps",
+    noWeight: Boolean = false,
     onToggle: () -> Unit,
     onRemove: () -> Unit,
     onEdit: () -> Unit = {},
@@ -247,11 +253,11 @@ internal fun SetRow(
             }
             // Tap a previous result to copy it straight into this set's fields.
             Text(
-                prev?.let { if (cardio) "${it.reps} min" else "${it.weightKg.toInt()}×${it.reps}" } ?: "-",
+                prev?.let { if (cardio) "${it.reps} min" else "${it.weightKg.toInt()}×${it.reps} ${it.quantityUnit}" } ?: "-",
                 Modifier.width(56.dp)
                     .then(
                         if (prev != null) Modifier.clickable {
-                            if (!cardio) s.weight = trimKg(prev.weightKg)
+                            if (!cardio && !noWeight) s.weight = trimKg(prev.weightKg)
                             s.reps = prev.reps.toString()
                             onEdit()
                         } else Modifier,
@@ -260,7 +266,7 @@ internal fun SetRow(
                 color = if (prev != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            if (cardio) {
+            if (cardio || noWeight) {
                 // Minutes live in the reps slot; no load to enter. Fills the row.
                 CompactField(s.reps, { s.reps = it; onEdit() }, Modifier.weight(1f), decimal = false, placeholder = s.suggestedReps)
             } else {
@@ -280,7 +286,7 @@ internal fun SetRow(
                     // a fake PR and skew every later suggestion). Cardio logs
                     // minutes in the reps slot, so it only gets the weight-free
                     // absolute rep cap via baselines being null.
-                    val question = if (becomingDone && !s.confirmedOdd && !cardio) {
+                    val question = if (becomingDone && !s.confirmedOdd && !cardio && !noWeight && quantityUnit == "reps") {
                         SetSanity.check(
                             weight = s.weight.toDoubleOrNull(),
                             reps = s.reps.toIntOrNull(),

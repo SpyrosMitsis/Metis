@@ -136,7 +136,7 @@ export default function CoachPage() {
     const sunday = new Date(monday + "T00:00:00");
     sunday.setDate(sunday.getDate() + 6);
     const { data } = await supabase
-      .from("planned_workouts").select("*")
+      .from("reconciled_session_plans").select("*")
       .gte("date", monday).lte("date", sunday.toISOString().slice(0, 10))
       .order("date");
     setActionWeek((data ?? []) as PlannedWorkout[]);

@@ -26,6 +26,16 @@ data class ManualActivityInsert(
 @Serializable
 data class HcActivityInsert(
     val intervals_id: String,
+    val source: String = "health_connect",
+    val source_id: String? = null,
+    val started_at: String? = null,
+    val ended_at: String? = null,
+    val start_local_date: String? = null,
+    val end_local_date: String? = null,
+    val timezone_name: String? = null,
+    val timezone_provenance: String = "unavailable",
+    val data_json: JsonObject? = null,
+    val measurement_provenance: JsonObject? = null,
     val type: String,
     val date: String,
     val duration_seconds: Int? = null,
@@ -50,6 +60,17 @@ data class CompletedActivity(
     val ctl: Double? = null,
     val atl: Double? = null,
     val data_json: JsonObject? = null,
+    val planned_workout_id: String? = null,
+    val duplicate_of: String? = null,
+    val duplicate_candidate_ids: List<String> = emptyList(),
+    val link_source: String? = null,
+    val session_state: String = "unknown",
+    val content_revision: Long = 1,
+    val session_group_id: String? = null,
+    val started_at: String? = null,
+    val ended_at: String? = null,
+    val timezone_provenance: String = "unavailable",
+    val measurement_provenance: JsonObject? = null,
 ) {
     val isManual: Boolean get() = intervals_id.startsWith("manual:")
     val distanceKm: Double? get() = distance_m?.let { it / 1000.0 }
@@ -154,6 +175,14 @@ data class AnalysisTarget(
 data class AnalysisSplit(val km: Double, val sec: Int = 0, val avg_hr: Int? = null, val in_band: Boolean? = null)
 
 @Serializable
+data class ExecutionEvidence(
+    val summary: String = "",
+    val sport_compatible: Boolean = false,
+    val duration_ratio: Double? = null,
+    val effort_compatible: Boolean? = null,
+)
+
+@Serializable
 data class ActivityAnalysis(
     val ok: Boolean = false,
     val score: Int? = null,
@@ -165,6 +194,7 @@ data class ActivityAnalysis(
     val target: AnalysisTarget? = null,
     val splits: List<AnalysisSplit> = emptyList(),
     val planned_title: String? = null,
+    val execution_evidence: ExecutionEvidence? = null,
     // "/km" (default) or "/100m" for swims; old cached analyses lack it.
     val pace_unit: String? = null,
     // Metres per split (1000, or 100 for swims).
@@ -193,7 +223,18 @@ data class StrengthAnalysisWatch(
 )
 
 @Serializable
+data class StrengthCoverageEvidence(val exact: Int = 0, val movement: Int = 0, val muscle: Int = 0, val total: Int = 0)
+
+@Serializable
+data class StrengthDoseEvidence(
+    val exercise: String = "", val planned_sets: Int = 0, val logged_sets: Int = 0,
+    val sets_in_rep_range: Int? = null, val status: String = "unknown", val note: String = "",
+)
+
+@Serializable
 data class StrengthAnalysis(
+    val coverage_evidence: StrengthCoverageEvidence? = null,
+    val dose_evidence: List<StrengthDoseEvidence> = emptyList(),
     val ok: Boolean = false,
     val score: Int? = null,
     val label: String? = null,

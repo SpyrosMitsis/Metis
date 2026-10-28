@@ -39,14 +39,14 @@ import com.workoutmaker.app.ui.screens.settings.sportLabel
 // the coach's note underneath, whole card tappable into the activity detail.
 @Composable
 internal fun SessionDebriefCard(
-    mod: Modifier,
+    modifier: Modifier,
     d: SessionDebrief,
     onOpen: () -> Unit,
 ) {
     val today = LocalDate.now().toString()
     val whenLabel = if (d.date == today) "today" else "yesterday"
     val sport = d.type?.takeIf { it.isNotBlank() }?.lowercase() ?: "session"
-    SectionCard(mod.clickable(onClick = onOpen), title = "Session debrief") {
+    SectionCard(modifier.clickable(onClick = onOpen), title = "Session debrief") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
@@ -83,11 +83,11 @@ internal fun SessionDebriefCard(
 // vs last week, the sport split, and the standout session. The coach-voice take
 // lives in the briefing at the top; this is the at-a-glance scoreboard.
 @Composable
-internal fun WeekReviewCard(mod: Modifier, wr: WeekReview, note: String? = null) {
+internal fun WeekReviewCard(modifier: Modifier, wr: WeekReview, note: String? = null) {
     fun sportLabel(s: String) = when (s) {
         "run" -> "Run"; "ride" -> "Ride"; "swim" -> "Swim"; "strength" -> "Strength"; else -> "Other"
     }
-    SectionCard(mod, title = "This week") {
+    SectionCard(modifier, title = "This week") {
         // The coach's voice on the week, above the deterministic scoreboard.
         note?.takeIf { it.isNotBlank() }?.let { QuoteBlock(it) }
         if (wr.sessions == 0 && wr.adherence.planned == 0) {
@@ -126,8 +126,8 @@ internal fun WeekReviewCard(mod: Modifier, wr: WeekReview, note: String? = null)
 }
 
 @Composable
-internal fun GoalCard(mod: Modifier, g: GoalProgress) {
-    SectionCard(mod, title = "Goal · ${g.goal}") {
+internal fun GoalCard(modifier: Modifier, g: GoalProgress) {
+    SectionCard(modifier, title = "Goal · ${g.goal}") {
         // Prefer an exact day countdown when we have the race date.
         val days = g.goal_date?.let {
             runCatching { ChronoUnit.DAYS.between(LocalDate.now(), LocalDate.parse(it)) }.getOrNull()

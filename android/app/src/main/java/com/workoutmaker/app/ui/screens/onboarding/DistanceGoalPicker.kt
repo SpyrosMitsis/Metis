@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.workoutmaker.app.data.EnduranceGoals
 import com.workoutmaker.app.data.TrainingProfile
 import com.workoutmaker.app.ui.screens.settings.GOALS_BY_SPORT
+import com.workoutmaker.app.ui.screens.settings.RACE_GOALS
 import com.workoutmaker.app.ui.screens.settings.toggleIn
 import com.workoutmaker.app.ui.components.rememberAnimationsEnabled
 import kotlin.math.abs
@@ -106,11 +107,11 @@ internal fun EnduranceSportQuestions(
     DistanceGoalEditor(sport, profile, seedIfUnset, onUpdate)
 
     // How far and how fast is not the whole question. A cyclist doing 40 km
-    // might be chasing FTP, or racing, or just riding: the distance is the same
-    // and the training is not. Only the chips the picker does not already own
-    // are offered, so nothing here can contradict the flag.
+    // might be chasing FTP or simply riding farther: the distance is the
+    // training target, not a calendar event. Dated events are collected once,
+    // separately, by StepRace after all sport goals are set.
     val intent = remember(sport) {
-        (GOALS_BY_SPORT[sport] ?: emptyList()) - EnduranceGoals.distanceOwnedGoals(sport)
+        ((GOALS_BY_SPORT[sport] ?: emptyList()) - EnduranceGoals.distanceOwnedGoals(sport)) - RACE_GOALS
     }
     if (intent.isNotEmpty()) {
         Text("What are you chasing?", style = MaterialTheme.typography.labelLarge)
@@ -378,9 +379,8 @@ private fun PacePanel(sport: String, paceSec: Int, onPace: (Int) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            // Minus is always slower and plus always faster, whichever way the
-            // displayed unit happens to count.
-            StepperButton(Icons.Filled.Remove, "Slower") { onPace(EnduranceGoals.stepPace(sport, paceSec, faster = false)) }
+            // Minus and plus follow the displayed number in every unit.
+            StepperButton(Icons.Filled.Remove, "Decrease ${EnduranceGoals.paceCaption(sport).lowercase()}") { onPace(EnduranceGoals.stepPaceValue(sport, paceSec, increase = false)) }
             Row(
                 Modifier.width(96.dp),
                 horizontalArrangement = Arrangement.Center,
@@ -398,7 +398,7 @@ private fun PacePanel(sport: String, paceSec: Int, onPace: (Int) -> Unit) {
                     modifier = Modifier.padding(start = 4.dp, bottom = 3.dp),
                 )
             }
-            StepperButton(Icons.Filled.Add, "Faster") { onPace(EnduranceGoals.stepPace(sport, paceSec, faster = true)) }
+            StepperButton(Icons.Filled.Add, "Increase ${EnduranceGoals.paceCaption(sport).lowercase()}") { onPace(EnduranceGoals.stepPaceValue(sport, paceSec, increase = true)) }
         }
         Slider(
             value = EnduranceGoals.paceFraction(sport, paceSec),
@@ -738,4 +738,3 @@ private fun GoalFlag() {
         drawPath(pennant, accent)
     }
 }
-

@@ -1,9 +1,11 @@
+import { availableImplements, sessionState } from "./session_context.ts";
 // Agentic coach tools — give the coach real reads into the athlete's data and
 // real actions (plan, generate, set goals, remember). Provider-agnostic: the
 // coach selects a tool by emitting JSON, the server runs it here and feeds back
 // an observation. Works on any LLM the user has configured (no native
 // function-calling required).
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import type { InjuryEntry } from "./types.ts";
 
 import { computeRecovery } from "./recovery.ts";
 import { freshnessWord, recoveryWord } from "./prompt.ts";
@@ -38,7 +40,7 @@ async function feasibilityInputs(
   date: string,
 ): Promise<FeasibilityInput> {
   const since = iso(Date.now() - 28 * DAY);
-  const { data } = await admin.from("completed_activities")
+  const { data } = await admin.from("effective_activities")
     .select("date, distance_m, duration_seconds, ctl")
     .eq("user_id", userId).gte("date", since).order("date", { ascending: false });
   const acts = data ?? [];
@@ -129,7 +131,7 @@ async function weekSnapshot(
 ): Promise<Array<{ date: string; type: string; title: string | null }>> {
   const start = mondayOf(new Date(anchor));
   const end = iso(new Date(start + "T00:00:00").getTime() + 6 * DAY);
-  const { data } = await admin.from("planned_workouts")
+  const { data } = await admin.from("reconciled_session_plans")
     .select("date, type, workout_json")
     .eq("user_id", userId).gte("date", start).lte("date", end)
     .order("date", { ascending: true });
@@ -157,6 +159,13 @@ export interface ToolDef {
 const NO_ARGS = { type: "object", properties: {}, additionalProperties: false };
 
 export const TOOL_CATALOG: ToolDef[] = [
+  { name: "get_today_plan", kind: "read", args: "{}", schema: NO_ARGS,
+    description: "Read today's saved sessions with full workout instructions, session slots and completion/skipped state. Use for what should I do today; do not generate a replacement just to explain an existing plan." },
+  {name:"get_adaptation_history",kind:"read",args:"{}",schema:NO_ARGS,description:"Inspect prior adaptation IDs, reasons and before/after sessions before an undo or when explaining plan changes."},
+  { name:"preview_adaptation",kind:"read",args:"{ today: 'YYYY-MM-DD', minutes?: number, unavailable_implements?: string[] }",schema:{type:"object",properties:{today:{type:"string"},minutes:{type:"number"},unavailable_implements:{type:"array",items:{type:"string"}}},required:["today"]},description:"Preview the smallest justified schedule adjustment after changed or missed training. Read before applying; preserves completed, recorded and locked sessions. Missing recordings stay unknown." },
+  { name:"apply_adaptation",kind:"act",args:"{ proposal_id: string, today: 'YYYY-MM-DD' }",schema:{type:"object",properties:{proposal_id:{type:"string"},today:{type:"string"}},required:["proposal_id","today"]},description:"Apply a previously previewed adaptation when the athlete requested the schedule change. Report exactly the saved changes and next action. A preview with clarification cannot be applied." },
+  { name:"undo_adaptation",kind:"act",args:"{ proposal_id: string, today: 'YYYY-MM-DD' }",schema:{type:"object",properties:{proposal_id:{type:"string"},today:{type:"string"}},required:["proposal_id","today"]},description:"Undo an adaptation while preserving subsequent completed/locked work. Rejects stale or currently unsuitable restores." },
+
   {
     name: "get_fitness", kind: "read", args: "{}", schema: NO_ARGS,
     description: "Current fitness: CTL (fitness), ATL (fatigue), TSB (form), weekly TSS load and acute:chronic ratio.",
@@ -194,18 +203,19 @@ export const TOOL_CATALOG: ToolDef[] = [
   },
   {
     name: "generate_workout", kind: "act",
-    args: "{ date?: 'YYYY-MM-DD', type?: 'run'|'strength'|'auto', duration?: number, request?: string, lock?: boolean }",
+    args: "{ date?: 'YYYY-MM-DD', type?: 'run'|'ride'|'swim'|'strength'|'auto', session_slot?: 0|1, duration?: number, request?: string, lock?: boolean }",
     schema: {
       type: "object",
       properties: {
         date: { type: "string", description: "YYYY-MM-DD; defaults to today" },
-        type: { type: "string", enum: ["run", "strength", "auto"] },
-        duration: { type: "number", description: "Target minutes (default 60)" },
+        type: { type: "string", enum: ["run", "ride", "swim", "strength", "auto"] },
+        session_slot: { type: "integer", enum: [0, 1], description: "Use an existing configured session slot; defaults to 0" },
+        duration: { type: "number", description: "Requested minutes; omit to use the saved availability and training history" },
         request: { type: "string", description: "Free-text session request, e.g. 'easy 8k' or 'upper-body push'" },
         lock: { type: "boolean", description: "Fix the session so re-planning won't replace it" },
       },
     },
-    description: "Create one workout on a date. Pass `request` for a specific session ('easy 8k', 'upper-body push'); set lock=true to fix it.",
+    description: "Create or replace one workout only when the athlete requests it, not when they ask what is already planned. Read get_today_plan first for today. Pass `request` for a specific session ('easy 8k', 'upper-body push'); set lock=true to fix it.",
   },
   {
     name: "move_workout", kind: "act",
@@ -266,6 +276,24 @@ export const TOOL_CATALOG: ToolDef[] = [
   {
     name: "resume_training", kind: "act", args: "{}", schema: NO_ARGS,
     description: "End an active training pause early. Use if the athlete says they're back / resuming sooner than the pause's original end date.",
+  },
+  {
+    name: "report_injury", kind: "act",
+    args: "{ area: string, pain?: number (1-10), severity?: 'mild'|'moderate'|'serious', detail?: string, days?: number }",
+    schema: {
+      type: "object",
+      properties: {
+        area: { type: "string", description: "Specific body area and side when known, e.g. 'left knee' or 'front of right knee'" },
+        pain: { type: "number", description: "Athlete's current pain from 1 (minimal) to 10 (severe), if they supplied it" },
+        severity: { type: "string", enum: ["mild", "moderate", "serious"], description: "Use only when the athlete clearly described severity; pain is preferred when they gave a 1-10 score" },
+        detail: { type: "string", description: "Useful context such as onset, trigger, swelling, sharpness, or what movement hurts" },
+        days: { type: "number", description: "Initial protection window in days; defaults to 7 and is capped at 60" },
+      },
+      required: ["area"],
+    },
+    description:
+      "Record a NEW or newly-described injury in the structured profile injuries list AND apply a dated training backoff in one atomic action. " +
+      "Call immediately when the athlete mentions pain or an injury; never use remember as a substitute. It is valid with only area: the coach should record first, then ask targeted questions for exact location, 1-10 pain, onset/trigger and red flags. Pain 7-10 or serious wording creates avoid protection; otherwise it creates ease protection until details arrive.",
   },
   {
     name: "set_injury_backoff", kind: "act",
@@ -498,12 +526,12 @@ export function validateAppSettings(
 }
 
 /** Tool definitions in the shape native tool-calling APIs expect. */
-export function nativeToolDefs(): { name: string; description: string; input_schema: Record<string, unknown> }[] {
-  return TOOL_CATALOG.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema }));
+export function nativeToolDefs(catalog: ToolDef[] = TOOL_CATALOG): { name: string; description: string; input_schema: Record<string, unknown> }[] {
+  return catalog.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema }));
 }
 
-export function toolCatalogPrompt(): string {
-  const lines = TOOL_CATALOG.map((t) => `- ${t.name}(${t.args}), ${t.description}`);
+export function toolCatalogPrompt(catalog: ToolDef[] = TOOL_CATALOG): string {
+  const lines = catalog.map((t) => `- ${t.name}(${t.args}), ${t.description}`);
   return lines.join("\n");
 }
 
@@ -518,7 +546,14 @@ async function callFunction(auth: string, name: string, body: unknown): Promise<
     signal: AbortSignal.timeout(120_000),
   });
   const text = await res.text();
-  try { return JSON.parse(text); } catch { return { raw: text, status: res.status }; }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return { error: `Planner returned HTTP ${res.status} without a valid JSON response`, status: res.status }; }
+  if (!res.ok) {
+    const body = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+    return { ...body, error: body.error || body.message || `Planner returned HTTP ${res.status}`, status: res.status };
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed : { error: "Planner returned an invalid response" };
 }
 
 /** Execute a coach tool; returns a concise observation string for the LLM. */
@@ -572,12 +607,13 @@ export async function executeTool(
   // one day, which is tolerant enough for any timezone offset.
   today?: string,
 ): Promise<string> {
+  const localToday = today && ISO_DATE.test(today) ? today : iso(Date.now());
   const minDate = today && ISO_DATE.test(today) ? today : iso(Date.now() - DAY);
   try {
     switch (name) {
       case "get_fitness": {
         const since = iso(Date.now() - 28 * DAY);
-        const { data } = await admin.from("completed_activities")
+        const { data } = await admin.from("effective_activities")
           .select("date, tss, ctl, atl").eq("user_id", userId).gte("date", since)
           .order("date", { ascending: false });
         // No intervals-provided CTL? Fill estimated values from stored TSS so
@@ -608,7 +644,7 @@ export async function executeTool(
       case "get_recent_activities": {
         const days = Math.min(60, Math.max(1, Number(args.days) || 14));
         const since = iso(Date.now() - days * DAY);
-        const { data } = await admin.from("completed_activities")
+        const { data } = await admin.from("effective_activities")
           .select("type, date, distance_m, duration_seconds, avg_hr, tss")
           .eq("user_id", userId).gte("date", since).order("date", { ascending: false }).limit(40);
         const rows = (data ?? []).map((r) => ({
@@ -619,12 +655,21 @@ export async function executeTool(
         }));
         return JSON.stringify(rows);
       }
+      case "get_today_plan": {
+        const { data, error } = await admin.from("reconciled_session_plans")
+          .select("id,date,session_slot,start_minute,type,completed,skipped,locked,reconciliation_status,workout_json")
+          .eq("user_id", userId).eq("date", localToday).order("session_slot");
+        return JSON.stringify({ today: localToday, error: error ? "Today's calendar could not be read" : null,
+          sessions: (data ?? []).map(r => ({ id: r.id, date: r.date, session_slot: r.session_slot ?? 0,
+            start_minute: r.start_minute, type: r.type, completed: r.completed, skipped: r.skipped,
+            locked: r.locked, status: r.reconciliation_status, workout: r.workout_json })) });
+      }
       case "get_planned_week": {
         const start = (typeof args.week_start === "string" && args.week_start) ||
           mondayOf(new Date(minDate));
         const end = iso(new Date(start + "T00:00:00").getTime() + 6 * DAY);
-        const { data } = await admin.from("planned_workouts")
-          .select("id, date, type, completed, locked, workout_json")
+        const { data, error } = await admin.from("reconciled_session_plans")
+          .select("id, date, type, completed, skipped, locked, reconciliation_status, activity_ids, workout_json")
           .eq("user_id", userId).gte("date", start).lte("date", end).order("date");
         // Each day's position relative to TODAY, stated rather than left to be
         // worked out. A week starts on Monday, so by Sunday most of it is
@@ -637,10 +682,13 @@ export async function executeTool(
           when: r.date < minDate ? "past" : r.date === minDate ? "today" : "upcoming",
           type: r.type,
           completed: r.completed,
+          skipped: r.skipped,
+          status: r.reconciliation_status,
+          actual_activity_ids: r.activity_ids,
           locked: r.locked,
           title: (r.workout_json as { title?: string })?.title ?? "",
         }));
-        return JSON.stringify({ today: minDate, week_start: start, sessions: rows });
+        return JSON.stringify({ today: minDate, week_start: start, sessions: rows, ...(error ? {error:"The planned week could not be read"} : {}) });
       }
       case "get_strength_summary": {
         const cutoff = Date.now() - 28 * DAY;
@@ -680,7 +728,7 @@ export async function executeTool(
           .order("date", { ascending: false })
           .limit(8);
         const pausedUntil = p?.training_paused_until as string | null;
-        const today = iso(Date.now());
+        const today = localToday;
         return JSON.stringify({
           // `goal` is the overarching TRAINING goal; the dated goal is a row in
           // `goals` below, named here so the two can never be read as one.
@@ -688,6 +736,11 @@ export async function executeTool(
           goal_race: goalRaceLine(pickGoalRace((races ?? []) as RaceRow[], today, o.goal_date as string), today) || null,
           experience: o.experience,
           days: o.days, session_min: o.session_duration, equipment: o.equipment,
+          sports: o.sports, primary_sport: o.primary_sport, implements: availableImplements(o),
+          weekly_minutes_max: o.weekly_minutes_max ?? null, session_windows: o.session_windows ?? [],
+          prescription_engine: o.prescription_engine ?? "model", training_history_confirmed: o.training_history_confirmed === true,
+          recovery_day_style: o.recovery_day_style ?? "rest", program_objectives: o.program_objectives ?? {},
+          automatic_event_preparation: o.automatic_event_preparation !== false, event_policies: o.event_policies ?? {},
           injuries: injuriesText(o), lthr: o.lthr, ftp: o.ftp, threshold_pace: o.threshold_pace_per_km,
           target_pace: o.target_pace, goals: races ?? [], known: p?.coach_knowledge ?? "",
           // Richer onboarding: per-activity goals + experience, per-day availability.
@@ -695,7 +748,7 @@ export async function executeTool(
           experience_by_sport: o.experience_by_sport, availability: o.day_availability,
           mobility_28d: stretches ?? [],
           // Active training pause (set_training_pause), null when there isn't one.
-          training_paused_until: pausedUntil && pausedUntil >= iso(Date.now()) ? pausedUntil : null,
+          training_paused_until: pausedUntil && pausedUntil >= today ? pausedUntil : null,
           training_pause_reason: p?.training_pause_reason ?? null,
           // The follow-up loop's state, so the coach can ask about a niggle it
           // has not heard about in a week instead of re-asking about one the
@@ -723,18 +776,21 @@ export async function executeTool(
         const chrono = [...wells].reverse();
         const rec = computeRecovery(
           wells,
-          chrono.map((w) => (w as { hrv_rmssd?: number }).hrv_rmssd).filter(isNum),
-          chrono.map((w) => (w as { resting_hr?: number }).resting_hr).filter(isNum),
+          chrono.filter(w=>isNum(w.hrv_rmssd)).map(w=>({date:w.date,value:w.hrv_rmssd!})),
+          chrono.filter(w=>isNum(w.resting_hr)).map(w=>({date:w.date,value:w.resting_hr!})),
           today,
         );
+        const {data: athlete}=await admin.from("user_profiles").select("onboarding").eq("id",userId).single();
+        const state=await sessionState(admin,userId,athlete?.onboarding??{},today??iso(Date.now()),"rest");
         // basis "none" means nothing was measured: the coach must not read the
         // placeholder 50 back to the athlete as a state of their body.
         return JSON.stringify({
+          decision_context: state.readiness,
           readiness: rec.basis === "none" ? "not measured today" : recoveryWord(rec.band),
           summary: rec.summary,
           basis: rec.basis,
           raw: {
-            score: rec.score,
+            score: rec.basis === "none" ? null : rec.score,
             band: rec.band,
             hrv: rec.hrv ?? null,
             resting_hr: rec.rhr ?? null,
@@ -746,7 +802,7 @@ export async function executeTool(
       case "get_execution_analysis": {
         interface Comp { name: string; score: number; detail: string }
         interface Stored { score?: number; label?: string; components?: Comp[]; feedback?: string }
-        const { data: endu } = await admin.from("completed_activities")
+        const { data: endu } = await admin.from("effective_activities")
           .select("date, type, analysis_json")
           .eq("user_id", userId).not("analysis_json", "is", null)
           .order("date", { ascending: false }).limit(5);
@@ -765,13 +821,25 @@ export async function executeTool(
         if (!rows.length) return JSON.stringify({ note: "no analyzed sessions yet, the athlete can analyze a workout from its detail page, or it happens automatically after a sync" });
         return JSON.stringify(rows);
       }
+      case "get_adaptation_history": {
+        const result=await callFunction(auth,"adapt-plan",{action:"history"}) as {history?:Array<{id:string;state:string;explanation:string;changes:Array<{date:string;session_slot:number;before:{title:string;duration_minutes:number};after:{title:string;duration_minutes:number}}>}>};
+        return JSON.stringify({history:(result.history??[]).map(p=>({id:p.id,state:p.state,explanation:p.explanation,changes:p.changes.map(c=>({date:c.date,session_slot:c.session_slot,before:c.before.title,after:c.after.title,before_minutes:c.before.duration_minutes,after_minutes:c.after.duration_minutes}))}))});
+      }
+      case "preview_adaptation":
+      case "apply_adaptation":
+      case "undo_adaptation": {
+        const date=String(args.today??today??iso(Date.now()));
+        const bad=dateError(date,minDate,{field:"today",required:true}); if(bad)return bad;
+        const result=await callFunction(auth,"adapt-plan",{...args,today:date,action:name==="preview_adaptation"?"preview":name==="undo_adaptation"?"undo":"apply"});
+        return JSON.stringify({ ...result as Record<string,unknown>,week_now:await weekSnapshot(admin,userId,date) });
+      }
       case "move_workout": {
         const newDate = String(args.new_date ?? "");
         const badMove = dateError(newDate, minDate, { field: "new_date", required: true });
         if (badMove) return badMove;
         let workoutId = typeof args.workout_id === "string" ? args.workout_id : null;
         if (!workoutId && typeof args.date === "string") {
-          const { data: rows } = await admin.from("planned_workouts")
+          const { data: rows } = await admin.from("reconciled_session_plans")
             .select("id, type, completed")
             .eq("user_id", userId).eq("date", args.date).neq("type", "rest")
             .order("created_at", { ascending: false });
@@ -794,8 +862,8 @@ export async function executeTool(
         if (badRest) return badRest;
         // Clear every non-rest planned session that day; delete-workout removes the
         // watch event too (same path the app's delete uses).
-        const { data: rows } = await admin.from("planned_workouts")
-          .select("id, type, workout_json").eq("user_id", userId).eq("date", d).neq("type", "rest");
+        const { data: rows } = await admin.from("reconciled_session_plans")
+          .select("id, type, workout_json").eq("user_id", userId).eq("date", d).neq("type", "rest").eq("completed",false).eq("locked",false).eq("skipped",false);
         // NAME what was deleted, do not just count it. This returned a bare
         // `cleared: 4` while quietly destroying the four sessions plan_week had
         // created moments earlier in the same turn; a count gave the model no
@@ -848,7 +916,7 @@ export async function executeTool(
         // Clear upcoming unlocked, incomplete sessions in the pause window now —
         // plan_week will also respect the pause on its own next run, but this
         // makes the calendar reflect it immediately.
-        const { data: rows } = await admin.from("planned_workouts")
+        const { data: rows } = await admin.from("reconciled_session_plans")
           .select("id, type").eq("user_id", userId).gte("date", today).lte("date", until)
           .eq("completed", false).eq("locked", false).neq("type", "rest");
         let cleared = 0;
@@ -889,6 +957,73 @@ export async function executeTool(
           effect: level === "avoid"
             ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
             : "the area is still trained, but hard zones and heavy loading through it are capped",
+        });
+      }
+      case "report_injury": {
+        // This deliberately combines profile capture with immediate protection.
+        // The old two-tool choreography (remember + set_injury_backoff) let a
+        // model successfully "remember" a knee injury without ever adding it
+        // to onboarding.injuries, so follow-ups and the Injury screen missed it.
+        const area = String(args.area ?? "").replace(/\s+/g, " ").trim();
+        if (!area) return "error: area is required";
+        const pain = typeof args.pain === "number" && Number.isFinite(args.pain)
+          ? Math.round(args.pain)
+          : null;
+        if (args.pain !== undefined && (pain === null || pain < 1 || pain > 10)) {
+          return "error: pain must be a whole number from 1 to 10";
+        }
+        const statedSeverity = args.severity;
+        if (statedSeverity !== undefined && statedSeverity !== "mild" && statedSeverity !== "moderate" && statedSeverity !== "serious") {
+          return "error: severity must be 'mild', 'moderate' or 'serious'";
+        }
+        const severity = pain === null
+          ? (statedSeverity ?? "")
+          : pain <= 3 ? "mild" : pain <= 6 ? "moderate" : "serious";
+        const detail = typeof args.detail === "string" ? args.detail.trim().slice(0, 240) : "";
+        const days = typeof args.days === "number" && Number.isFinite(args.days)
+          ? Math.min(60, Math.max(1, Math.round(args.days)))
+          : BACKOFF_DAYS;
+        const today = minDate;
+        const { data: p } = await admin.from("user_profiles")
+          .select("onboarding, injury_backoff").eq("id", userId).single();
+        const o = (p?.onboarding ?? {}) as Record<string, unknown>;
+        const existing = injuriesOf(o);
+        const sameArea = (i: InjuryEntry) => i.area.trim().toLowerCase() === area.toLowerCase();
+        const prior = existing.find(sameArea);
+        const entry: InjuryEntry = {
+          area: prior?.area || area,
+          severity: severity || prior?.severity || "",
+          note: detail || prior?.note,
+          raised_at: prior?.raised_at || today,
+          status: "present",
+        };
+        const injuries = prior
+          ? existing.map((i) => sameArea(i) ? entry : i)
+          : [...existing, entry];
+        // A severe report is structurally avoided; all other reports get a
+        // reversible ease-level cap while the coach gathers the missing detail.
+        const level = severity === "serious" ? "avoid" : "ease";
+        const backoffs = upsertBackoff(activeBackoffs(p?.injury_backoff, today), {
+          area: entry.area,
+          level,
+          until: addDays(today, days),
+          reason: detail || undefined,
+          set_at: today,
+        });
+        await admin.from("user_profiles").update({
+          onboarding: { ...o, injuries },
+          injury_backoff: backoffs,
+        }).eq("id", userId);
+        return JSON.stringify({
+          ok: true,
+          created: !prior,
+          injury: { area: entry.area, severity: entry.severity || null, detail: entry.note ?? null },
+          protection: level,
+          until: addDays(today, days),
+          next_questions: ["exact location / side", "pain 1-10", "what triggers it and when it began"],
+          effect: level === "avoid"
+            ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
+            : "hard zones and heavy loading through this area are capped while you clarify the injury",
         });
       }
       case "clear_injury_backoff": {
@@ -953,7 +1088,7 @@ export async function executeTool(
         // regenerated the day with a FREE choice of sport. Measured live, four
         // easy runs came back as four identical strength sessions. Easing a run
         // must produce an easier run: read what is actually planned and pin it.
-        const { data: planned } = await admin.from("planned_workouts")
+        const { data: planned } = await admin.from("reconciled_session_plans")
           .select("id, type, workout_json").eq("user_id", userId).eq("date", day)
           .neq("type", "rest").order("created_at", { ascending: false });
         const current = (planned ?? [])[0];
@@ -986,7 +1121,9 @@ export async function executeTool(
         // so only the FORMAT is enforced here, not the floor.
         if (badWeek && !badWeek.includes("has already passed")) return badWeek;
 
-        const r = await callFunction(auth, "plan-week", { start_date: args.start_date }) as Record<string, unknown>;
+        // Resolve and forward the SAME local date/week used by the read-back.
+        const requestedStart = typeof args.start_date === "string" ? args.start_date : mondayOf(new Date(localToday));
+        const r = await callFunction(auth, "plan-week", { start_date: requestedStart, today: localToday }) as Record<string, unknown>;
 
         // THE BUG THIS FIXES: this returned `scheduled: 5` and nothing else, so
         // the model had no way to describe the week it had just created and
@@ -996,19 +1133,25 @@ export async function executeTool(
         // back from the database so the summary is grounded in what exists.
         const start = typeof args.start_date === "string" && ISO_DATE.test(args.start_date)
           ? args.start_date
-          : mondayOf(new Date(minDate));
+          : requestedStart;
         const end = iso(new Date(start).getTime() + 6 * DAY);
-        const { data: days } = await admin.from("planned_workouts")
+        const { data: days, error: readError } = await admin.from("reconciled_session_plans")
           .select("date, type, workout_json")
           .eq("user_id", userId).gte("date", start).lte("date", end)
           .order("date", { ascending: true });
 
         return JSON.stringify({
-          ok: !r.error,
-          error: r.error ?? null,
+          ok: !r.error && !readError && typeof r.scheduled === "number" && r.scheduled > 0 && (days?.length ?? 0) > 0,
+          error: r.error ?? readError?.message ?? (typeof r.scheduled !== "number" ? "Planner did not confirm saved sessions" : null)
+            ?? (r.scheduled === 0 ? r.rationale ?? "No new sessions were scheduled; requested dates may be protected" : null)
+            ?? (!days?.length ? "Saved sessions could not be verified on the calendar" : null),
+          scheduled: r.scheduled ?? 0,
           week_start: start,
           week_focus: r.week_focus,
+          rationale: r.rationale,
           pushed: r.pushed,
+          calendar_saved: !r.error && typeof r.scheduled === "number" && r.scheduled > 0,
+          delivery: r.sync_error ? "pending" : Number(r.pushed) > 0 ? "sent" : "not_confirmed",
           // The authoritative answer to "what is on the calendar now".
           week_now: (days ?? []).map((d) => ({
             date: d.date,
@@ -1021,16 +1164,18 @@ export async function executeTool(
         const bad = dateError(args.date, minDate, { field: "date", required: false });
         if (bad) return bad;
         const r = await callFunction(auth, "generate-workout", {
-          date: args.date, type: args.type ?? "auto",
+          date: args.date ?? localToday, type: args.type ?? "auto", session_slot: args.session_slot ?? 0,
           // Only pin a duration when explicitly requested — otherwise the
           // generator applies the athlete's flexible length preference.
           ...(typeof args.duration === "number" ? { duration: args.duration } : {}),
-          request: args.request, lock: args.lock === true, push: true,
+          request: args.request, lock: args.lock === true, push: true, today: localToday,
         }) as Record<string, unknown>;
         const w = r.workout as { title?: string } | undefined;
         return JSON.stringify({
           ok: !!r.workout_id,
           title: w?.title ?? null,
+          calendar_saved: !!r.workout_id,
+          delivery: r.push_error || r.sync_error ? "pending" : r.intervals_event_id ? "sent" : "not_confirmed",
           // The date the workout actually landed on, echoed from the generator
           // where it knows it. "today" was a guess the model then repeated to
           // the athlete as fact.

@@ -24,7 +24,48 @@ data class InjuryEntry(
 )
 
 @Serializable
+data class EventPreparationPolicy(
+    val days: Int,
+    val duration_factor: Double,
+    val allow_quality: Boolean = false,
+)
+
+@Serializable
+data class PoolProfile(
+    val length: Int = 25,
+    val unit: String = "m",
+    val strokes: List<String> = listOf("freestyle"),
+    val seconds_per_length: Double? = null,
+)
+
+@Serializable
+data class SessionWindow(val day: String, val slot: Int, val start_minute: Int, val max_minutes: Int)
+@Serializable
+data class OpenWaterChecks(val date: String = "", val experienced: Boolean = false, val supervised_venue: Boolean = false,
+    val buddy: Boolean = false, val venue_open: Boolean = false, val conditions_approved_by_venue: Boolean = false,
+    val stroke: String = "freestyle", val max_minutes: Int = 20)
+@Serializable
+data class CalibrationRecord(val sport: String, val kind: String, val value: Double, val date: String, val reliability: String = "unknown", val distance_m: Double? = null)
+
+@Serializable
 data class TrainingProfile(
+    val session_windows: List<SessionWindow> = emptyList(),
+    val minimum_session_gap_minutes: Int = 180,
+    val multisport_goal: String = "none",
+    val recovery_day_style: String = "rest",
+    val program_started_on: String? = null,
+    val open_water: OpenWaterChecks? = null,
+    val calibrations: List<CalibrationRecord> = emptyList(),
+    val prescription_engine: String = "model",
+    val primary_sport: String? = null,
+    val program_objectives: Map<String, String> = emptyMap(),
+    val venues: Map<String, String> = emptyMap(),
+    val event_policies: Map<String, EventPreparationPolicy> = emptyMap(),
+    val automatic_event_preparation: Boolean = true,
+    val implements: List<String>? = null,
+    val weekly_minutes_max: Int? = null,
+    val training_history_confirmed: Boolean = false,
+    val pool: PoolProfile? = null,
     val goal: String? = null,
     val experience: String? = null,
     val days: List<String> = emptyList(),
@@ -194,6 +235,7 @@ fun deriveEquipmentTier(list: List<String>): String {
         s.any { it == "full gym" || it == "machines" } -> "Full gym"
         s.any { it == "barbell" || it == "squat rack" } -> "Barbell + rack"
         s.any { it == "dumbbells" || it == "kettlebells" } -> "Dumbbells"
+        s.any { it == "resistance bands" } -> "Resistance bands"
         else -> "Bodyweight"
     }
 }

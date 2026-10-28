@@ -109,7 +109,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.navigation:navigation-compose:2.8.1")
+    implementation("androidx.navigation:navigation-compose:2.8.9")
 
     // Play Billing — play flavor only, so foss builds stay Google-free.
     "playImplementation"("com.android.billingclient:billing-ktx:7.1.1")
@@ -150,9 +150,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     // Instrumented tests (run parse + Room insert on a real device).
-    androidTestImplementation("androidx.test.ext:junit:1.1.5")
-    androidTestImplementation("androidx.test:runner:1.5.2")
-    androidTestImplementation("androidx.test:core-ktx:1.5.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    // New Android versions removed InputManager.getInstance reflection.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     // Compose UI tests. The recent coach regressions were LAYOUT decisions
     // (chips under a full-size list took no taps; a banner fired on prose that
     // only described the week), which only a composed screen can catch.

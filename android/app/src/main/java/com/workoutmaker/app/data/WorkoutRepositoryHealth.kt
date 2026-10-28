@@ -1,5 +1,7 @@
 package com.workoutmaker.app.data
 
+import com.workoutmaker.app.util.runCatching
+
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.ktor.client.call.body
@@ -7,14 +9,14 @@ import com.workoutmaker.app.health.HcExercise
 import com.workoutmaker.app.health.HealthSnapshot
 import com.workoutmaker.app.util.AppLog
 
-suspend fun WorkoutRepository.upsertWellness(checkin: WellnessCheckin) {
+suspend fun WorkoutRepository.upsertWellness(checkin: WellnessCheckin) = withAccount {
     supabase.postgrest.from("wellness_checkins").upsert(checkin, onConflict = "user_id,date")
 }
 
 // Manually-entered HRV / resting HR / sleep for a day the watch didn't sync —
 // writes only the provided columns onto that day's wellness row (source=manual),
 // exactly like the Health Connect path so energy/soreness aren't clobbered.
-suspend fun WorkoutRepository.upsertManualRecovery(date: String, hrvMs: Double?, restingHr: Int?, sleepMinutes: Int?) {
+suspend fun WorkoutRepository.upsertManualRecovery(date: String, hrvMs: Double?, restingHr: Int?, sleepMinutes: Int?) = withAccount {
     val row = WellnessHealthUpdate(
         date = date,
         hrv_rmssd = hrvMs,
@@ -47,8 +49,8 @@ suspend fun WorkoutRepository.bodyHistory(fromDate: String): List<BodyHistoryPoi
 }.logFailure("bodyHistory").getOrDefault(emptyList())
 
 // Dated body metrics (scale sync or manual quick-log) onto wellness rows.
-suspend fun WorkoutRepository.upsertBodyMetrics(rows: List<BodyMetricUpsert>) {
-    if (rows.isEmpty()) return
+suspend fun WorkoutRepository.upsertBodyMetrics(rows: List<BodyMetricUpsert>) = withAccount {
+    if (rows.isEmpty()) return@withAccount
     supabase.postgrest.from("wellness_checkins").upsert(rows, onConflict = "user_id,date")
 }
 
@@ -61,7 +63,7 @@ suspend fun WorkoutRepository.wellnessCheckin(date: String): WellnessCheckin? =
     }.decodeList<WellnessCheckin>().firstOrNull()
 
 // Upsert a multi-day Health Connect series (7-day trend) in one call.
-suspend fun WorkoutRepository.submitHealthSnapshots(snaps: List<HealthSnapshot>) {
+suspend fun WorkoutRepository.submitHealthSnapshots(snaps: List<HealthSnapshot>) = withAccount {
     val rows = snaps.filter { it.hasAny }.map { snap ->
         WellnessHealthUpdate(
             date = snap.date,
@@ -89,14 +91,14 @@ data class HealthSyncResult(
 // is NOT connected — ingests exercise sessions as fallback activities with
 // an estimated training load. Intervals users get richer versions of the
 // same sessions from sync-intervals, so the gate avoids cross-source dupes.
-suspend fun WorkoutRepository.syncHealth(): HealthSyncResult {
-    if (!health.isAvailable) return HealthSyncResult()
+suspend fun WorkoutRepository.syncHealth(): HealthSyncResult = withAccount {
+    if (!health.isAvailable) return@withAccount HealthSyncResult()
     val week = health.readWeek(7)
     if (week.isNotEmpty()) submitHealthSnapshots(week)
     runCatching { syncBodyComp() }.logFailure("syncBodyComp")
     val intervalsConnected = runCatching { intervalsConnection() != null }.getOrDefault(true)
-    if (intervalsConnected) return HealthSyncResult(week)
-    return HealthSyncResult(week, ingestHcExercises())
+    if (intervalsConnected) return@withAccount HealthSyncResult(week)
+    return@withAccount HealthSyncResult(week, ingestHcExercises())
 }
 
 // Smart-scale weight/body-fat from Health Connect → the training profile,
@@ -136,8 +138,23 @@ private suspend fun WorkoutRepository.syncBodyComp() {
 // Health Connect exercise sessions → completed_activities rows ("hc:<uid>").
 // Upsert on (user_id, intervals_id) keeps re-syncs idempotent.
 private suspend fun WorkoutRepository.ingestHcExercises(): Int {
+    suspend fun recordSync(error: String? = null, success: Boolean = false) {
+        supabase.postgrest.from("activity_sync_state").upsert(kotlinx.serialization.json.buildJsonObject {
+            put("user_id", kotlinx.serialization.json.JsonPrimitive(uid()))
+            put("source", kotlinx.serialization.json.JsonPrimitive("health_connect"))
+            put("last_attempt_at", kotlinx.serialization.json.JsonPrimitive(java.time.Instant.now().toString()))
+            put("last_error", error?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull)
+            if (success) {
+                put("last_success_at", kotlinx.serialization.json.JsonPrimitive(java.time.Instant.now().toString()))
+                put("coverage_from", kotlinx.serialization.json.JsonPrimitive(java.time.LocalDate.now().minusDays(30).toString()))
+                put("coverage_to", kotlinx.serialization.json.JsonPrimitive(java.time.LocalDate.now().toString()))
+            }
+        }, onConflict = "user_id,source")
+    }
+    recordSync()
+    try {
     val sessions = health.readExerciseSessions(30)
-    if (sessions.isEmpty()) return 0
+    if (sessions.isEmpty()) { recordSync(success = true); return 0 }
     // Skip watch-recorded gym sessions the athlete also logged in the app.
     val earliest = sessions.minOf { it.startMs }
     val logged = runCatching { strengthDao.workoutsSince(earliest) }.getOrDefault(emptyList())
@@ -160,6 +177,22 @@ private suspend fun WorkoutRepository.ingestHcExercises(): Int {
             }
             HcActivityInsert(
                 intervals_id = "hc:${s.uid}",
+                source_id = s.uid,
+                started_at = java.time.Instant.ofEpochMilli(s.startMs).toString(),
+                ended_at = java.time.Instant.ofEpochMilli(s.endMs).toString(),
+                start_local_date = s.date,
+                end_local_date = s.endDate,
+                timezone_name = s.timezoneName,
+                timezone_provenance = s.timezoneProvenance,
+                data_json = kotlinx.serialization.json.buildJsonObject {
+                    s.origin?.let { put("origin", kotlinx.serialization.json.JsonPrimitive(it)) }
+                },
+                measurement_provenance = kotlinx.serialization.json.buildJsonObject {
+                    put("duration_seconds", kotlinx.serialization.json.JsonPrimitive("observed"))
+                    put("distance_m", kotlinx.serialization.json.JsonPrimitive(if (s.distanceM == null) "unavailable" else "observed"))
+                    put("avg_hr", kotlinx.serialization.json.JsonPrimitive(if (s.avgHr == null) "unavailable" else "observed"))
+                    put("tss", kotlinx.serialization.json.JsonPrimitive("estimated"))
+                },
                 type = s.type,
                 date = s.date,
                 duration_seconds = s.durationSec,
@@ -176,5 +209,10 @@ private suspend fun WorkoutRepository.ingestHcExercises(): Int {
         "health",
         "hc exercise ingest: ${sessions.size} sessions, ${rows.size} upserted",
     )
+    recordSync(success = true)
     return rows.size
+    } catch (e: Exception) {
+        runCatching { recordSync(error = e.message ?: "Health Connect sync failed") }
+        throw e
+    }
 }

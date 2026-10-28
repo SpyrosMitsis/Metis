@@ -38,7 +38,7 @@ const strengthSection = (exercises: Record<string, unknown>[]) => ({
 });
 
 // --- progressive-overload floor --------------------------------------------
-Deno.test("strength load below last top set is raised + flagged", () => {
+Deno.test("strength recovery load below last top set stays reduced", () => {
   const w = mk({
     sections: [strengthSection([
       { name: "Back Squat", sets: 4, reps: "5", weight_kg: 80, muscle: "Quads", notes: "" },
@@ -48,8 +48,8 @@ Deno.test("strength load below last top set is raised + flagged", () => {
     ...EMPTY_CTX,
     mainLifts: [{ exercise: "Back Squat", estimated1rm: 130, lastWeight: 100, lastReps: 5, lastSets: 4 }],
   });
-  assertEquals(r.corrected.sections[0].exercises[0].weight_kg, 100);
-  assert(r.violations.some((v) => v.includes("below last top set")));
+  assertEquals(r.corrected.sections[0].exercises[0].weight_kg, 80);
+  assert(!r.violations.some((v) => v.includes("below last top set")));
 });
 
 // --- safety ceiling (vs 1RM) -----------------------------------------------
@@ -316,8 +316,8 @@ Deno.test("review is deterministic and idempotent (re-review is a no-op)", () =>
   const first = reviewWorkout(w, ctx);
   const second = reviewWorkout(first.corrected, ctx); // re-reviewing the fixed output
   assertEquals(second.violations, []); // nothing left to fix
-  assertEquals(first.corrected.sections[0].exercises[0].weight_kg, 100);
-  assertEquals(second.corrected.sections[0].exercises[0].weight_kg, 100);
+  assertEquals(first.corrected.sections[0].exercises[0].weight_kg, 80);
+  assertEquals(second.corrected.sections[0].exercises[0].weight_kg, 80);
 });
 
 // --- equipment hard-filter -------------------------------------------------

@@ -84,6 +84,7 @@ internal val SETTINGS_GROUPS = listOf(
         SettingsItem("planning", Icons.Outlined.CalendarMonth, "Planning", "Auto-plan, weekly load & challenge level"),
     )),
     SettingsGroup("App", listOf(
+        SettingsItem("tour", Icons.Outlined.AutoAwesome, "App tour", "Replay the guide to the main features"),
         SettingsItem("connections", Icons.Outlined.Link, "Connections", "Intervals.icu, Health Connect & calendar"),
         SettingsItem("notifications", Icons.Outlined.Notifications, "Notifications", "Morning brief, rest alerts & vibration"),
         SettingsItem("defaults", Icons.Outlined.FitnessCenter, "Units & gym session", "Units, rest timer, barbell, screen"),
@@ -101,7 +102,7 @@ internal val SETTINGS_GROUPS = listOf(
 )
 
 @Composable
-fun SettingsScreen(vm: SettingsViewModel = hiltViewModel(), onOpenBodyHistory: () -> Unit = {}) {
+fun SettingsScreen(vm: SettingsViewModel = hiltViewModel(), onOpenBodyHistory: () -> Unit = {}, onStartTour: () -> Unit = {}) {
     LaunchedEffect(Unit) { vm.load() }
     // Save confirmations / errors go to the one app-wide snackbar.
     val snackbar = LocalAppSnackbar.current
@@ -115,7 +116,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel(), onOpenBodyHistory: (
     BackHandler(enabled = open != null) { open = null }
 
     if (open == null) {
-        SettingsIndex(vm, onOpen = { open = it })
+        SettingsIndex(vm, onOpen = { if (it == "tour") onStartTour() else open = it })
     } else {
         SettingsDetail(open!!, vm, onOpenBodyHistory) { open = null }
     }

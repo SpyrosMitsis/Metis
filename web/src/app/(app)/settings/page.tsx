@@ -1,5 +1,7 @@
 "use client";
 
+import { PlanningControls } from "@/components/planning-controls";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTheme } from "next-themes";
@@ -163,6 +165,49 @@ export default function SettingsPage() {
                   <option value="">Select…</option>
                   {EQUIPMENT.map((e) => <option key={e} value={e}>{e}</option>)}
                 </select>
+              </Field>
+
+              <PlanningControls o={o} patch={patch} />
+              <Field label="Workout construction">
+                <select className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                  value={o.prescription_engine ?? "model"} onChange={e => patch({ prescription_engine: e.target.value as "model" | "deterministic" })}>
+                  <option value="model">Coach interpreted workouts</option>
+                  <option value="deterministic">Structured familiarization templates</option>
+                </select>
+                <p className="text-xs text-muted-foreground">Templates use effort targets and recent training. Custom written requests still use the coach.</p>
+              </Field>
+              <Field label="Primary sport">
+                <select value={o.primary_sport ?? ""} onChange={e => patch({ primary_sport: e.target.value as OnboardingData["primary_sport"] })}>
+                  <option value="">Use selected sports order</option>{["run", "ride", "swim", "strength"].map(sport => <option key={sport}>{sport}</option>)}
+                </select>
+              </Field>
+              <label className="flex gap-2 text-sm"><input type="checkbox" checked={o.training_history_confirmed ?? false} onChange={e => patch({ training_history_confirmed: e.target.checked })} />Recent recorded and manual activities represent my last four weeks of training.</label>
+              <Field label="Weekly time limit (minutes)">
+                <Input type="number" min={0} value={o.weekly_minutes_max ?? ""} onChange={e => patch({ weekly_minutes_max: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value)) })} />
+              </Field>
+              <Field label="Available implements">
+                <ChipRow>{["dumbbells", "barbell", "rack", "stable_bench", "kettlebell", "pullup_bar", "resistance_band", "band_anchor", "cable_machine", "treadmill", "indoor_trainer", "stationary_bike", "power_meter"].map(item =>
+                  <Chip key={item} active={o.implements?.includes(item) ?? false} onClick={() => patch({ implements: o.implements?.includes(item) ? o.implements.filter(x => x !== item) : [...(o.implements ?? []), item] })}>{item.replaceAll("_", " ")}</Chip>
+                )}</ChipRow>
+                <p className="text-xs text-muted-foreground">Selecting implements makes this list authoritative. A bench, rack and band anchor are separate items.</p>
+              </Field>
+              {(["run", "ride", "swim", "strength"] as const).map(sport => <Field key={sport} label={`${sport} program objective`}>
+                <select value={o.program_objectives?.[sport] ?? "fitness"} onChange={e => patch({ program_objectives: { ...o.program_objectives, [sport]: e.target.value } })}>
+                  {(sport === "strength" ? ["fitness", "strength", "hypertrophy", "return"] : ["fitness", "performance", "technique", "return"]).map(objective => <option key={objective}>{objective}</option>)}
+                </select>
+              </Field>)}
+              {(["run", "ride", "swim"] as const).map(sport => <Field key={sport} label={`${sport} venue`}>
+                <select value={o.venues?.[sport] ?? (sport === "swim" ? "pool" : "unspecified")} onChange={e => patch({ venues: { ...o.venues, [sport]: e.target.value } })}>
+                  {(sport === "run" ? ["unspecified", "road", "trail", "treadmill"] : sport === "ride" ? ["unspecified", "road", "gravel", "mtb", "indoor"] : ["pool", "open_water"]).map(venue => <option key={venue}>{venue}</option>)}
+                </select>
+              </Field>)}
+              <Field label="Swimming pool">
+                <Input type="number" min={1} placeholder="Pool length" value={o.pool?.length ?? ""} onChange={e => patch({ pool: e.target.value ? { ...o.pool, length: Number(e.target.value), unit: o.pool?.unit ?? "m", strokes: o.pool?.strokes ?? ["freestyle"] } : undefined })} />
+                {o.pool && <>
+                  <Input type="number" min={1} max={600} placeholder="Comfortable seconds per pool length (optional)" value={o.pool.seconds_per_length ?? ""} onChange={e => patch({ pool: { ...o.pool!, seconds_per_length: e.target.value ? Number(e.target.value) : undefined } })} />
+                  <select value={o.pool.unit} onChange={e => patch({ pool: { ...o.pool!, unit: e.target.value as "m" | "yd" } })}><option value="m">Metres</option><option value="yd">Yards</option></select>
+                  <select value={o.pool.strokes[0] ?? "freestyle"} onChange={e => patch({ pool: { ...o.pool!, strokes: [e.target.value] } })}>{["freestyle", "backstroke", "breaststroke"].map(stroke => <option key={stroke}>{stroke}</option>)}</select>
+                </>}
               </Field>
 
               {/* The goal RACE is named by the starred row in Goals & races

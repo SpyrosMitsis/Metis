@@ -1,5 +1,7 @@
 package com.workoutmaker.app.strength
 
+import com.workoutmaker.app.util.runCatching
+
 import androidx.room.withTransaction
 import com.workoutmaker.app.data.AppDatabase
 import com.workoutmaker.app.data.StrengthLogInsert
@@ -7,6 +9,11 @@ import com.workoutmaker.app.data.StrengthSet
 import com.workoutmaker.app.data.WorkoutRepository
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.rpc
+import kotlinx.serialization.json.*
+import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.serialization.Serializable
 import java.util.UUID
@@ -26,7 +33,7 @@ import com.workoutmaker.app.data.generateWorkout
 import com.workoutmaker.app.data.logStrengthSet
 
 // Domain types passed from the active-session ViewModel when a workout finishes.
-data class FinishedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "")
+data class FinishedSet(val weightKg: Double, val reps: Int, val rpe: Int?, val isWarmup: Boolean, val note: String = "", val quantityUnit: String = "reps")
 data class FinishedExercise(val name: String, val sets: List<FinishedSet>)
 
 // Cloud backup DTOs (timestamps are epoch millis to round-trip with Room).
@@ -36,9 +43,9 @@ data class FinishedExercise(val name: String, val sets: List<FinishedSet>)
 // whole restore/merge down with it. Nulls are coalesced to safe defaults when
 // mapped to Room (see toEntity below).
 @Serializable
-data class CloudWorkout(val id: String, val name: String? = null, val started_at: Long? = null, val ended_at: Long? = null, val duration_sec: Int? = null, val total_volume_kg: Double? = null, val note: String? = null)
+data class CloudWorkout(val id: String, val name: String? = null, val started_at: Long? = null, val ended_at: Long? = null, val duration_sec: Int? = null, val total_volume_kg: Double? = null, val note: String? = null, val planned_workout_id: String? = null)
 @Serializable
-data class CloudSet(val id: String, val workout_id: String, val exercise_name: String? = null, val muscle: String? = null, val idx: Int? = null, val weight_kg: Double? = null, val reps: Int? = null, val rpe: Int? = null, val is_warmup: Boolean? = null)
+data class CloudSet(val id: String, val workout_id: String, val exercise_name: String? = null, val muscle: String? = null, val idx: Int? = null, val weight_kg: Double? = null, val reps: Int? = null, val rpe: Int? = null, val is_warmup: Boolean? = null, val note: String? = null, val quantity_unit: String? = null)
 @Serializable
 data class CloudRoutine(val id: String, val name: String? = null, val created_at: Long? = null)
 @Serializable
@@ -47,11 +54,11 @@ data class CloudRoutineItem(val id: String, val routine_id: String, val exercise
 // Cloud -> Room, coalescing any null cloud values to safe defaults.
 private fun CloudWorkout.toEntity(synced: Boolean = true) = WorkoutEntity(
     id, name ?: "Workout", started_at ?: 0L, ended_at ?: (started_at ?: 0L),
-    duration_sec ?: 0, total_volume_kg ?: 0.0, note ?: "", synced,
+    duration_sec ?: 0, total_volume_kg ?: 0.0, note ?: "", synced, planned_workout_id,
 )
 private fun CloudSet.toEntity() = SetEntity(
     id, workout_id, exercise_name ?: "", muscle ?: "", idx ?: 0,
-    weight_kg ?: 0.0, reps ?: 0, rpe, is_warmup ?: false,
+    weight_kg ?: 0.0, reps ?: 0, rpe, is_warmup ?: false, note ?: "", quantity_unit ?: "reps",
 )
 private fun CloudRoutine.toEntity() = RoutineEntity(id, name ?: "Routine", created_at ?: 0L)
 private fun CloudRoutineItem.toEntity() = RoutineItemEntity(
@@ -92,32 +99,36 @@ class StrengthRepository @Inject constructor(
     private val supabase: SupabaseClient,
     private val db: AppDatabase,
 ) {
+    private val syncMutex = Mutex()
     suspend fun recentWorkouts(limit: Int = 50) = dao.recentWorkouts(limit)
     suspend fun setsForWorkout(id: String) = dao.setsForWorkout(id)
     suspend fun loggedExercises() = dao.loggedExercises()
+    suspend fun exerciseLogSummaries() = cloud.withAccount { dao.exerciseLogSummaries() }
+    suspend fun hiddenExerciseStats() = cloud.withAccount { cloud.prefs.hiddenExerciseStats(cloud.uid()) }
+    suspend fun restoreExerciseStats(name: String) = cloud.withAccount { cloud.prefs.setExerciseStatsHidden(cloud.uid(), name, false) }
 
     /** Most recent prior performance of an exercise, ordered by set index. */
-    suspend fun previousSets(exercise: String): List<SetEntity> {
+    suspend fun previousSets(exercise: String): List<SetEntity> = cloud.withAccount {
         val rows = dao.lastSetsForExercise(exercise)
-        val lastWorkout = rows.firstOrNull()?.workoutId ?: return emptyList()
-        return rows.filter { it.workoutId == lastWorkout }.sortedBy { it.idx }
+        val lastWorkout = rows.firstOrNull()?.workoutId ?: return@withAccount emptyList()
+        return@withAccount rows.filter { it.workoutId == lastWorkout }.sortedBy { it.idx }
     }
 
     suspend fun stats(exercise: String): ExerciseStats =
         StrengthStats.compute(exercise, dao.setsHistoryForExercise(exercise))
 
     // --- mapping helpers ---------------------------------------------------
-    private fun DatedSet.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, startedAt)
-    private fun SetEntity.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, 0)
-    private fun SetWithDate.toLog() = LogSet(weightKg, reps, null, isWarmup, "", startedAt)
+    private fun DatedSet.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, startedAt, quantityUnit)
+    private fun SetEntity.toLog() = LogSet(weightKg, reps, rpe, isWarmup, muscle, 0, quantityUnit)
+    private fun SetWithDate.toLog() = LogSet(weightKg, reps, null, isWarmup, "", startedAt, quantityUnit)
 
     // --- B2 + B5: weekly volume / balance / deload -------------------------
-    suspend fun weeklyReport(): WeeklyReport {
+    suspend fun weeklyReport(): WeeklyReport = cloud.withAccount {
         val now = System.currentTimeMillis()
         val week7 = dao.datedSetsSince(now - 7L * 86_400_000).map { it.toLog() }
         val weeks8 = dao.datedSetsSince(now - 56L * 86_400_000).map { it.toLog() }
         val mv = VolumeBalance.byMuscle(week7)
-        return WeeklyReport(
+        return@withAccount WeeklyReport(
             muscleVolume = mv,
             balance = VolumeBalance.balance(mv),
             deload = Deload.analyze(Deload.weekly(weeks8)),
@@ -126,65 +137,62 @@ class StrengthRepository @Inject constructor(
     }
 
     // --- B1: next-session suggestion for an exercise -----------------------
-    suspend fun progressionFor(exercise: String): ProgressionSuggestion? {
+    suspend fun progressionFor(exercise: String): ProgressionSuggestion? = cloud.withAccount {
         // Cardio is logged in minutes, not load — no strength progression target.
-        if (ExerciseCatalog.isCardio(exercise)) return null
-        val last = previousSets(exercise).map { it.toLog() }
-        if (last.isEmpty()) return null
+        if (ExerciseCatalog.isCardio(exercise)) return@withAccount null
+        val previous = previousSets(exercise)
+        if (previous.any { it.quantityUnit != "reps" }) return@withAccount null
+        val last = previous.map { it.toLog() }
+        if (last.isEmpty()) return@withAccount null
+        // Band resistance is not a comparable kilogram load. Keep manual band
+        // setup/effort notes; do not invent a plate increment.
+        if (ExerciseCatalog.find(exercise)?.category == "Band" || exercise.contains("assisted", ignoreCase = true)) return@withAccount null
         val compound = ExerciseCatalog.find(exercise)?.compound ?: false
         val (lo, hi) = if (compound) 5 to 8 else 8 to 12
-        return Progression.suggest(last, ProgressionRule.DOUBLE, lo, hi, compound)
+        return@withAccount Progression.suggest(last, ProgressionRule.DOUBLE, lo, hi, compound)
     }
 
     // --- E3: repeat last workout ------------------------------------------
-    suspend fun lastWorkoutWithSets(): Pair<WorkoutEntity, List<SetEntity>>? {
-        val w = dao.recentWorkouts(1).firstOrNull() ?: return null
-        return w to dao.setsForWorkout(w.id)
+    suspend fun lastWorkoutWithSets(): Pair<WorkoutEntity, List<SetEntity>>? = cloud.withAccount {
+        val w = dao.recentWorkouts(1).firstOrNull() ?: return@withAccount null
+        return@withAccount w to dao.setsForWorkout(w.id)
     }
 
     // Delete a logged workout locally; queue the cloud delete for the sync pass.
     // Transactional: a crash mid-sequence must not leave a workout without sets
     // or a delete without its tombstone.
-    suspend fun deleteWorkout(id: String) = db.withTransaction {
+    suspend fun deleteWorkout(id: String) = cloud.withAccount { db.withTransaction {
         dao.deleteSetsForWorkout(id)
         dao.deleteWorkout(id)
         dao.insertTombstone(TombstoneEntity("workout", id))
-    }
+    } }
 
     // Swallowed errors are still logged so failures aren't invisible in logcat.
     private fun <T> Result<T>.logFailure(op: String): Result<T> =
         onFailure { Log.w("StrengthRepo", "$op failed", it) }
 
     // --- D1: custom exercises ---------------------------------------------
-    suspend fun loadAndRegisterCustom() {
-        // Merge cloud → local (best-effort) so customs created elsewhere — the
-        // web logger or the AI generator registering an off-catalog exercise —
-        // show up here too. Names with a pending local delete stay deleted.
-        runCatching {
-            val cloud = supabase.postgrest.from("strength_custom_exercises").select().decodeList<CloudCustomExercise>()
-            if (cloud.isNotEmpty()) {
-                val pendingDeletes = dao.tombstones()
-                    .filter { it.tbl == "custom" }.map { it.rowId }.toHashSet()
-                val known = dao.customExercises().map { it.name }.toHashSet()
-                val fresh = cloud.filter { it.name !in known && it.name !in pendingDeletes }
-                if (fresh.isNotEmpty()) {
-                    dao.insertCustomExercises(fresh.map { CustomExerciseEntity(it.name, it.muscle, it.category, it.compound) })
-                }
-            }
-        }.logFailure("loadAndRegisterCustom/cloud")
+    suspend fun loadAndRegisterCustom() = cloud.withAccount {
         val local = dao.customExercises()
         ExerciseCatalog.registerCustom(local.map { Exercise(it.name, it.muscle, it.category, it.compound) })
     }
 
-    suspend fun addCustomExercise(name: String, muscle: String, category: String, compound: Boolean) {
+    suspend fun addCustomExercise(name: String, muscle: String, category: String, compound: Boolean) = cloud.withAccount {
         val e = CustomExerciseEntity(name.trim(), muscle, category, compound, synced = false)
-        dao.insertCustomExercise(e)
+        db.withTransaction {
+            dao.deleteTombstone("custom", e.name)
+            dao.insertCustomExercise(e)
+        }
+        cloud.prefs.setExerciseStatsHidden(cloud.uid(), name.trim(), false)
         loadAndRegisterCustom()
     }
 
-    suspend fun deleteCustomExercise(name: String) {
-        dao.deleteCustomExercise(name)
-        dao.insertTombstone(TombstoneEntity("custom", name))
+    suspend fun deleteCustomExercise(name: String, hideFromStats: Boolean = false) = cloud.withAccount {
+        db.withTransaction {
+            dao.deleteCustomExercise(name)
+            dao.insertTombstone(TombstoneEntity("custom", name))
+        }
+        if (hideFromStats && ExerciseCatalog.all.none { it.name == name }) cloud.prefs.setExerciseStatsHidden(cloud.uid(), name, true)
         loadAndRegisterCustom()
     }
 
@@ -196,7 +204,7 @@ class StrengthRepository @Inject constructor(
      * the next sync re-pushes their sets and rebuilds strength_logs with the
      * canonical names. Returns the number of customs collapsed.
      */
-    suspend fun cleanupMislabeledCustoms(): Int {
+    suspend fun cleanupMislabeledCustoms(): Int = cloud.withAccount {
         var collapsed = 0
         for (c in dao.customExercises()) {
             val canon = ExerciseCatalog.canonicalFor(c.name) ?: continue
@@ -207,38 +215,38 @@ class StrengthRepository @Inject constructor(
             collapsed++
         }
         if (collapsed > 0) loadAndRegisterCustom()
-        return collapsed
+        return@withAccount collapsed
     }
 
     // --- D5: favorites + recents ------------------------------------------
     suspend fun favorites(): List<String> = dao.favorites()
     suspend fun recentExercises(limit: Int = 12): List<String> = dao.recentExercises(limit)
-    suspend fun toggleFavorite(name: String, makeFavorite: Boolean) {
+    suspend fun toggleFavorite(name: String, makeFavorite: Boolean) = cloud.withAccount {
         if (makeFavorite) dao.addFavorite(FavoriteEntity(name)) else dao.removeFavorite(name)
     }
 
     // --- B4: instantiate a program as routines ----------------------------
-    suspend fun createProgram(program: StrengthProgram): Int {
+    suspend fun createProgram(program: StrengthProgram): Int = cloud.withAccount {
         for (day in program.days) {
             saveRoutine("${program.name}, ${day.name}", day.exercises)
         }
-        return program.days.size
+        return@withAccount program.days.size
     }
 
     // --- F2: CSV import ----------------------------------------------------
-    suspend fun importCsv(text: String): ImportSummary {
+    suspend fun importCsv(text: String): ImportSummary = cloud.withAccount {
         val lineCount = text.count { it == '\n' } + 1
         val firstLine = text.lineSequence().firstOrNull()?.take(80) ?: ""
         Log.i("IMPORT", "read ${text.length} chars, ~$lineCount lines, header: $firstLine")
         val result = StrengthCsvImport.parse(text)
         Log.i("IMPORT", "parsed: format=${result.format} workouts=${result.workoutCount} sets=${result.setCount}")
         if (result.format == "unrecognized") {
-            return ImportSummary(ok = false, format = "unrecognized",
+            return@withAccount ImportSummary(ok = false, format = "unrecognized",
                 error = "Couldn't recognise this file (read ${text.length} chars, $lineCount lines). " +
                     "Header was: “$firstLine”. Export a CSV from Strong or Hevy and try again.")
         }
         if (result.workouts.isEmpty()) {
-            return ImportSummary(ok = false, format = result.format,
+            return@withAccount ImportSummary(ok = false, format = result.format,
                 error = "Found the $lineCount-line file but no logged sets in it " +
                     "(${result.cardioRows} cardio, ${result.skippedRows} unreadable rows).",
                 cardioRowsSkipped = result.cardioRows, unparsedRows = result.skippedRows)
@@ -255,18 +263,20 @@ class StrengthRepository @Inject constructor(
             for (ex in w.exercises) {
                 val muscle = ExerciseCatalog.muscleOf(ex.name)
                 ex.sets.forEachIndexed { i, s ->
-                    if (!s.isWarmup) totalVolume += s.weightKg * s.reps
-                    setEntities.add(SetEntity(UUID.randomUUID().toString(), workoutId, ex.name, muscle, i + 1, s.weightKg, s.reps, s.rpe, s.isWarmup, s.note))
+                    if (!s.isWarmup && s.quantityUnit == "reps" && ExerciseMetadataCatalog.byName[ex.name]?.loadMode !in listOf("band", "assistance")) totalVolume += s.weightKg * s.reps
+                    setEntities.add(SetEntity(UUID.randomUUID().toString(), workoutId, ex.name, muscle, i + 1, s.weightKg, s.reps, s.rpe, s.isWarmup, s.note, s.quantityUnit))
                 }
             }
             val we = WorkoutEntity(workoutId, w.name, w.startedAt, w.startedAt, 0, totalVolume, "Imported", synced = false)
-            dao.insertWorkout(we)
-            if (setEntities.isNotEmpty()) dao.insertSets(setEntities)
+            db.withTransaction {
+                dao.insertWorkout(we)
+                if (setEntities.isNotEmpty()) dao.insertSets(setEntities)
+            }
             existing.add(w.startedAt)
             added++; setsAdded += setEntities.size
         }
         Log.i("IMPORT", "inserted $added workouts ($setsAdded sets), skipped $duplicates dup; db now ${dao.allStartedAts().size}")
-        return ImportSummary(
+        return@withAccount ImportSummary(
             ok = true, format = result.format,
             workoutsAdded = added, duplicatesSkipped = duplicates, setsAdded = setsAdded,
             cardioRowsSkipped = result.cardioRows, unparsedRows = result.skippedRows,
@@ -274,27 +284,27 @@ class StrengthRepository @Inject constructor(
     }
 
     // Full detail for one logged workout (header + every set), for the detail page.
-    suspend fun workoutWithSets(id: String): Pair<WorkoutEntity, List<SetEntity>>? {
-        val w = dao.workout(id) ?: return null
-        return w to dao.setsForWorkout(id)
+    suspend fun workoutWithSets(id: String): Pair<WorkoutEntity, List<SetEntity>>? = cloud.withAccount {
+        val w = dao.workout(id) ?: return@withAccount null
+        return@withAccount w to dao.setsForWorkout(id)
     }
 
     // Q8: turn a logged workout into a reusable routine (exercise → set count).
-    suspend fun saveWorkoutAsRoutine(id: String): String? {
-        val (w, sets) = workoutWithSets(id) ?: return null
+    suspend fun saveWorkoutAsRoutine(id: String): String? = cloud.withAccount {
+        val (w, sets) = workoutWithSets(id) ?: return@withAccount null
         // Preserve exercise order and count working+warmup sets per exercise.
         val perExercise = LinkedHashMap<String, Int>()
         sets.forEach { perExercise[it.exerciseName] = (perExercise[it.exerciseName] ?: 0) + 1 }
-        if (perExercise.isEmpty()) return null
+        if (perExercise.isEmpty()) return@withAccount null
         saveRoutine(w.name, perExercise.toList())
-        return w.name
+        return@withAccount w.name
     }
 
     // Q11: export the entire strength history as a Strong-compatible CSV so it can
     // be re-imported here or anywhere else. Semicolon-delimited, matching Strong.
-    suspend fun exportCsv(): String {
+    suspend fun exportCsv(): String = cloud.withAccount {
         val sb = StringBuilder()
-        sb.append("Date;Workout Name;Exercise Name;Set Order;Weight;Weight Unit;Reps;RPE;Notes\n")
+        sb.append("Date;Workout Name;Exercise Name;Set Order;Weight;Weight Unit;Reps;RPE;Notes;Quantity Unit\n")
         val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         val zone = ZoneId.systemDefault()
         fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
@@ -304,15 +314,15 @@ class StrengthRepository @Inject constructor(
             for (s in sets) {
                 val weight = if (s.weightKg == s.weightKg.toLong().toDouble()) s.weightKg.toLong().toString()
                     else s.weightKg.toString()
-                sb.append("$date;${q(w.name)};${q(s.exerciseName)};${s.idx};$weight;kg;${s.reps};${s.rpe ?: ""};${q(s.note)}\n")
+                sb.append("$date;${q(w.name)};${q(s.exerciseName)};${s.idx};$weight;kg;${s.reps};${s.rpe ?: ""};${q(s.note)};${s.quantityUnit}\n")
             }
         }
-        return sb.toString()
+        return@withAccount sb.toString()
     }
 
     suspend fun routines(): List<RoutineWithItems> = dao.routines()
 
-    suspend fun saveRoutine(name: String, exercises: List<Pair<String, Int>>) {
+    suspend fun saveRoutine(name: String, exercises: List<Pair<String, Int>>) = cloud.withAccount {
         val rid = UUID.randomUUID().toString()
         val createdAt = System.currentTimeMillis()
         val items = exercises.mapIndexed { i, (ex, sets) ->
@@ -326,72 +336,40 @@ class StrengthRepository @Inject constructor(
                 restSec = ExerciseCatalog.restOf(ex),
             )
         }
-        dao.insertRoutine(RoutineEntity(rid, name.ifBlank { "Routine" }, createdAt, synced = false))
-        dao.insertRoutineItems(items)
+        db.withTransaction {
+            dao.insertRoutine(RoutineEntity(rid, name.ifBlank { "Routine" }, createdAt, synced = false))
+            dao.insertRoutineItems(items)
+        }
     }
 
     // Edit an existing routine in place: keep its id (and createdAt), replace its
     // items. Marked unsynced so the next sync pushes the change.
-    suspend fun updateRoutine(routine: RoutineEntity, items: List<RoutineItemEntity>) {
+    suspend fun updateRoutine(routine: RoutineEntity, items: List<RoutineItemEntity>) = cloud.withAccount { db.withTransaction {
         dao.deleteRoutineItems(routine.id)
         dao.insertRoutine(routine.copy(synced = false))
         dao.insertRoutineItems(items.mapIndexed { i, it -> it.copy(routineId = routine.id, position = i) })
-    }
+    } }
 
-    suspend fun deleteRoutine(id: String) {
+    suspend fun deleteRoutine(id: String) = cloud.withAccount { db.withTransaction {
         dao.deleteRoutineItems(id)
         dao.deleteRoutine(id)
         dao.insertTombstone(TombstoneEntity("routine", id))
-    }
+    } }
 
     // B3: ask the AI generator for a strength session (not pushed; the user logs it live).
     private val genJson = Json { ignoreUnknownKeys = true; isLenient = true }
-    suspend fun generateAiStrength(durationMin: Int = 60): Workout? {
+    suspend fun generateAiStrength(durationMin: Int = 60): Workout? = cloud.withAccount {
         val raw = cloud.generateWorkout(
             GenerateRequest(type = "strength", duration = durationMin, push = false),
         )
-        return runCatching {
+        return@withAccount runCatching {
             genJson.decodeFromString(GenerateResult.serializer(), raw).workout
         }.logFailure("generateAiStrength/parse").getOrNull()
     }
 
-    /** Restore strength history + routines from the cloud if the local DB is empty
-     *  (e.g. after a reinstall). Returns the number of workouts restored. Throws
-     *  on failure so the caller can tell "cloud is empty" from "restore failed" —
-     *  swallowing it here made a network blip after reinstall look like no history
-     *  (and newly logged sessions would then diverge from the un-restored cloud). */
-    suspend fun restoreIfEmpty(): Int {
-        if (dao.recentWorkouts(1).isNotEmpty() || dao.routines().isNotEmpty()) return 0
-        return run {
-            val cw = supabase.postgrest.from("strength_workouts").select {
-                order("started_at", Order.DESCENDING); limit(300)
-            }.decodeList<CloudWorkout>()
-            if (cw.isNotEmpty()) {
-                val ids = cw.map { it.id }
-                val cs = supabase.postgrest.from("strength_workout_sets").select {
-                    filter { isIn("workout_id", ids) }
-                }.decodeList<CloudSet>()
-                cw.forEach { dao.insertWorkout(it.toEntity()) }
-                if (cs.isNotEmpty()) dao.insertSets(cs.map { it.toEntity() })
-            }
-            val cr = supabase.postgrest.from("strength_routines").select {
-                order("created_at", Order.DESCENDING); limit(100)
-            }.decodeList<CloudRoutine>()
-            if (cr.isNotEmpty()) {
-                val rids = cr.map { it.id }
-                val cri = supabase.postgrest.from("strength_routine_items").select {
-                    filter { isIn("routine_id", rids) }
-                }.decodeList<CloudRoutineItem>()
-                cr.forEach { dao.insertRoutine(it.toEntity()) }
-                if (cri.isNotEmpty()) dao.insertRoutineItems(cri.map { it.toEntity() })
-            }
-            cw.size
-        }
-    }
-
     /** Flip a planned calendar workout's completed flag — used when a planned
      *  strength session is logged (or un-done) from the strength logger. */
-    suspend fun markPlannedWorkoutDone(plannedId: String, done: Boolean) {
+    suspend fun markPlannedWorkoutDone(plannedId: String, done: Boolean) = cloud.withAccount {
         supabase.postgrest.from("planned_workouts")
             .update(mapOf("completed" to JsonPrimitive(done))) {
                 filter { eq("id", plannedId) }
@@ -403,39 +381,54 @@ class StrengthRepository @Inject constructor(
      *  cloud row differs from a local copy with no pending local change).
      *  Unlike restoreIfEmpty this runs even when local history is non-empty,
      *  giving true two-way sync. Returns # merged in. */
-    suspend fun mergeFromCloud(): Int =
-        runCatching { mergeFromCloudOrThrow() }.logFailure("mergeFromCloud").getOrDefault(0)
+    suspend fun mergeFromCloud(): Int = cloud.withAccount {
+        syncMutex.withLock { mergeFromCloudOrThrow() }
+    }
 
-    // Throwing variant so syncPending can tell merge failure apart from "nothing
-    // to merge" — it must NOT run the destructive strength_logs rebuild when the
-    // merge failed (a same-day web-logged session would be erased).
     private suspend fun mergeFromCloudOrThrow(): Int {
-        val localById = dao.recentWorkouts(10_000).associateBy { it.id }
-        val cloud = supabase.postgrest.from("strength_workouts").select {
-            order("started_at", Order.DESCENDING); limit(300)
-        }.decodeList<CloudWorkout>()
-        val missing = cloud.filter { it.id !in localById }
-        // A web edit shows up as a changed cloud row. Local pending edits
-        // (synced = false) win — they'll overwrite the cloud on the next push.
-        val changed = cloud.filter { c ->
-            val l = localById[c.id] ?: return@filter false
-            if (!l.synced) return@filter false
-            val ce = c.toEntity()
-            l.name != ce.name || l.note != ce.note || l.endedAt != ce.endedAt ||
-                l.durationSec != ce.durationSec ||
-                kotlin.math.abs(l.totalVolumeKg - ce.totalVolumeKg) > 0.01
+        val snapshot = supabase.postgrest.rpc("strength_snapshot",
+            buildJsonObject { put("p_owner", cloud.uid()) }).decodeAs<StrengthCloudSnapshot>()
+        return db.withTransaction {
+            val deleted = dao.tombstones().groupBy { it.tbl }
+                .mapValues { (_, rows) -> rows.map { it.rowId }.toSet() }
+            val local = dao.recentWorkouts(Int.MAX_VALUE).associateBy { it.id }
+            val incoming = snapshot.workouts.filter {
+                it.id !in deleted["workout"].orEmpty() && local[it.id]?.synced != false
+            }
+            // A complete snapshot makes remote deletions distinguishable from
+            // an incomplete page. Never remove pending local changes.
+            val remoteIds = snapshot.workouts.map { it.id }.toSet()
+            local.values.filter { it.synced && it.id !in remoteIds }.forEach {
+                dao.deleteSetsForWorkout(it.id); dao.deleteWorkout(it.id)
+            }
+            incoming.forEach {
+                dao.deleteSetsForWorkout(it.id)
+                dao.insertWorkout(it.toEntity())
+            }
+            val incomingIds = incoming.map { it.id }.toSet()
+            dao.insertSets(snapshot.sets.filter { it.workout_id in incomingIds }.map { it.toEntity() })
+            val routines = dao.routines().associateBy { it.routine.id }
+            val remoteRoutines = snapshot.routines.map { it.id }.toSet()
+            routines.values.filter { it.routine.synced && it.routine.id !in remoteRoutines }.forEach {
+                dao.deleteRoutineItems(it.routine.id); dao.deleteRoutine(it.routine.id)
+            }
+            val incomingRoutines = snapshot.routines.filter {
+                it.id !in deleted["routine"].orEmpty() && routines[it.id]?.routine?.synced != false
+            }
+            incomingRoutines.forEach {
+                dao.deleteRoutineItems(it.id); dao.insertRoutine(it.toEntity())
+            }
+            val routineIds = incomingRoutines.map { it.id }.toSet()
+            dao.insertRoutineItems(snapshot.items.filter { it.routine_id in routineIds }.map { it.toEntity() })
+            val customs = dao.customExercises().associateBy { it.name }
+            val remoteNames = snapshot.custom.map { it.name }.toSet()
+            customs.values.filter { it.synced && it.name !in remoteNames }.forEach { dao.deleteCustomExercise(it.name) }
+            dao.insertCustomExercises(snapshot.custom.filter {
+                it.name !in deleted["custom"].orEmpty() && customs[it.name]?.synced != false
+            }.map { CustomExerciseEntity(it.name, it.muscle, it.category, it.compound) })
+            ExerciseCatalog.registerCustom(dao.customExercises().map { Exercise(it.name,it.muscle,it.category,it.compound) })
+            incoming.count { it.id !in local }
         }
-        if (missing.isEmpty() && changed.isEmpty()) return 0
-        val ids = (missing + changed).map { it.id }
-        val cs = supabase.postgrest.from("strength_workout_sets").select {
-            filter { isIn("workout_id", ids) }
-        }.decodeList<CloudSet>()
-        // Changed workouts are replaced wholesale (old local sets dropped first).
-        changed.forEach { dao.deleteSetsForWorkout(it.id) }
-        // synced defaults true ⇒ a merged workout isn't queued for re-push.
-        (missing + changed).forEach { dao.insertWorkout(it.toEntity()) }
-        if (cs.isNotEmpty()) dao.insertSets(cs.map { it.toEntity() })
-        return missing.size + changed.size
     }
 
     /**
@@ -452,7 +445,8 @@ class StrengthRepository @Inject constructor(
         // Q2: when re-saving an edited workout, reuse its id (and delete the old
         // sets first) so the entry is updated in place rather than duplicated.
         existingId: String? = null,
-    ): FinishResult = db.withTransaction {
+        plannedWorkoutId: String? = null,
+    ): FinishResult = cloud.withAccount { db.withTransaction {
         // Transactional so an edit's delete-old + insert-new is atomic — a crash
         // between them would otherwise lose the workout entirely.
         // In edit mode, drop the old version first so PR detection and history
@@ -467,7 +461,8 @@ class StrengthRepository @Inject constructor(
         val priorBestWorkoutVolume = dao.bestWorkoutVolume() ?: 0.0
         val prHits = mutableListOf<PrHit>()
         for (ex in exercises) {
-            val session = ex.sets.map { LogSet(it.weightKg, it.reps, it.rpe, it.isWarmup) }
+            if (ExerciseMetadataCatalog.byName[ex.name]?.loadMode in listOf("band", "assistance")) continue
+            val session = ex.sets.filter { it.quantityUnit == "reps" }.map { LogSet(it.weightKg, it.reps, it.rpe, it.isWarmup) }
             val working = session.filter { !it.isWarmup && it.reps > 0 }
             if (working.isEmpty()) continue
             val prior = Prs.record(dao.setsHistoryForExercise(ex.name).map { it.toLog() })
@@ -486,7 +481,7 @@ class StrengthRepository @Inject constructor(
         for (ex in exercises) {
             val muscle = ExerciseCatalog.muscleOf(ex.name)
             ex.sets.forEachIndexed { i, s ->
-                if (!s.isWarmup) totalVolume += s.weightKg * s.reps
+                if (!s.isWarmup && s.quantityUnit == "reps" && ExerciseMetadataCatalog.byName[ex.name]?.loadMode !in listOf("band", "assistance")) totalVolume += s.weightKg * s.reps
                 setEntities.add(
                     SetEntity(
                         id = UUID.randomUUID().toString(),
@@ -499,6 +494,7 @@ class StrengthRepository @Inject constructor(
                         rpe = s.rpe,
                         isWarmup = s.isWarmup,
                         note = s.note,
+                        quantityUnit = s.quantityUnit,
                     ),
                 )
             }
@@ -519,11 +515,12 @@ class StrengthRepository @Inject constructor(
             totalVolumeKg = totalVolume,
             note = note,
             synced = false, // pushed to the cloud by the next sync pass (works offline)
+            plannedWorkoutId = plannedWorkoutId,
         )
         dao.insertWorkout(workoutEntity)
         if (setEntities.isNotEmpty()) dao.insertSets(setEntities)
         FinishResult(workoutId, prHits)
-    }
+    } }
 
     // ========================================================================
     // Offline sync: drain everything created/deleted while offline. Called by
@@ -533,126 +530,76 @@ class StrengthRepository @Inject constructor(
     // ========================================================================
     suspend fun pendingSyncCount(): Int = dao.pendingSyncCount()
 
-    suspend fun syncPending(): Int {
-        // Each item syncs in its own runCatching so one poison row can't block
-        // the rest of the queue; the first error is rethrown at the end so
-        // WorkManager still retries, after everything syncable has drained.
-        var firstError: Throwable? = null
-        fun noteFailure(e: Throwable) { if (firstError == null) firstError = e }
-        val zone = ZoneId.systemDefault()
-
-        // 1. Push workouts logged/imported/edited offline (+ their sets). They
-        // are NOT marked synced here: the synced=0 flag doubles as the dirty
-        // marker for the strength_logs rebuild below, so a crash between push
-        // and rebuild re-triggers both on the next pass (both are idempotent).
-        val idsByDate = mutableMapOf<String, MutableList<String>>()
-        for (w in dao.unsyncedWorkouts()) {
-            runCatching {
-                val sets = dao.setsForWorkout(w.id)
-                supabase.postgrest.from("strength_workouts").upsert(
-                    CloudWorkout(w.id, w.name, w.startedAt, w.endedAt, w.durationSec, w.totalVolumeKg, w.note),
+    suspend fun syncPending(): Int = cloud.withAccount {
+        syncMutex.withLock {
+            val captured = db.withTransaction {
+                StrengthUpload(
+                    dao.unsyncedWorkouts().map { it to dao.setsForWorkout(it.id) },
+                    dao.unsyncedRoutines(), dao.unsyncedCustom(), dao.tombstones(),
                 )
-                // Edited workouts re-save with FRESH set ids, so upsert alone would
-                // leave the old rows behind — replace the cloud sets wholesale.
-                supabase.postgrest.from("strength_workout_sets").delete { filter { eq("workout_id", w.id) } }
-                if (sets.isNotEmpty()) {
-                    supabase.postgrest.from("strength_workout_sets").upsert(
-                        sets.map { CloudSet(it.id, it.workoutId, it.exerciseName, it.muscle, it.idx, it.weightKg, it.reps, it.rpe, it.isWarmup) },
-                    )
-                }
-                val date = Instant.ofEpochMilli(w.startedAt).atZone(zone).toLocalDate().toString()
-                idsByDate.getOrPut(date) { mutableListOf() }.add(w.id)
-            }.logFailure("syncPending/workout").onFailure(::noteFailure)
-        }
-
-        // 1b. Rebuild strength_logs (the AI generator's volume/e1RM feed) for the
-        // affected dates from local truth — insert-only pushes duplicated rows
-        // every time a workout was edited. Merge cloud sessions in first so a
-        // same-day web-logged workout isn't dropped from the rebuild; if the
-        // merge FAILS, skip the destructive rebuild entirely this pass (the
-        // workouts stay unsynced and the whole step re-runs next time).
-        val mergeOk = idsByDate.isEmpty() ||
-            runCatching { mergeFromCloudOrThrow() }.logFailure("syncPending/merge").onFailure(::noteFailure).isSuccess
-        val rebuiltDates = mutableListOf<String>()
-        if (mergeOk) {
-            for ((date, ids) in idsByDate) {
-                runCatching {
-                    supabase.postgrest.from("strength_logs").delete { filter { eq("date", date) } }
-                    val dayWorkouts = dao.recentWorkouts(10_000).filter {
-                        Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate().toString() == date
-                    }
-                    for (w in dayWorkouts) {
-                        dao.setsForWorkout(w.id).filter { !it.isWarmup && it.reps > 0 }
-                            .groupBy { it.exerciseName }.forEach { (name, exSets) ->
-                                cloud.logStrengthSet(
-                                    StrengthLogInsert(
-                                        date = date,
-                                        exercise_name = name,
-                                        muscle_groups = listOf(ExerciseCatalog.muscleOf(name)),
-                                        sets = exSets.map { StrengthSet(reps = it.reps, weight_kg = it.weightKg, rpe = it.rpe) },
-                                        estimated_1rm = exSets.maxOf { epley1rm(it.weightKg, it.reps) },
-                                    ),
-                                )
-                            }
-                    }
-                }.logFailure("syncPending/logs")
-                    .onSuccess {
-                        // Synced only once the date's feed is rebuilt — see step 1.
-                        ids.forEach { dao.markWorkoutSynced(it) }
-                        rebuiltDates += date
-                    }
-                    .onFailure(::noteFailure)
             }
-        }
-
-        // Kick off the execution analysis for the just-synced day(s) so the
-        // score + AI feedback are ready the moment the session is opened.
-        // force = true because the logs for those dates just changed.
-        // Best-effort — an analysis failure never fails the sync.
-        for (d in rebuiltDates) {
-            runCatching { cloud.analyzeStrength(d, force = true) }.logFailure("syncPending/analyze")
-        }
-
-        // 2. Push routines.
-        for (r in dao.unsyncedRoutines()) {
-            runCatching {
-                supabase.postgrest.from("strength_routines").upsert(CloudRoutine(r.routine.id, r.routine.name, r.routine.createdAt))
-                if (r.items.isNotEmpty()) {
-                    supabase.postgrest.from("strength_routine_items").upsert(
-                        r.items.map { CloudRoutineItem(it.id, it.routineId, it.exerciseName, it.position, it.targetSets, it.targetReps, it.restSec) },
-                    )
-                }
-                dao.markRoutineSynced(r.routine.id)
-            }.logFailure("syncPending/routine").onFailure(::noteFailure)
-        }
-
-        // 3. Push custom exercises.
-        for (c in dao.unsyncedCustom()) {
-            runCatching {
-                supabase.postgrest.from("strength_custom_exercises").upsert(CloudCustomExercise(c.name, c.muscle, c.category, c.compound))
-                dao.markCustomSynced(c.name)
-            }.logFailure("syncPending/custom").onFailure(::noteFailure)
-        }
-
-        // 4. Propagate deletions made offline.
-        for (t in dao.tombstones()) {
-            runCatching {
-                when (t.tbl) {
-                    "workout" -> {
-                        supabase.postgrest.from("strength_workout_sets").delete { filter { eq("workout_id", t.rowId) } }
-                        supabase.postgrest.from("strength_workouts").delete { filter { eq("id", t.rowId) } }
+            if (captured.isNotEmpty()) {
+                supabase.postgrest.rpc("sync_strength", captured.payload(cloud.uid(), ZoneId.systemDefault().id))
+                // Acknowledge exactly the snapshot sent, never a newer edit.
+                db.withTransaction {
+                    captured.workouts.forEach { (w, sets) ->
+                        dao.acknowledgeWorkout(w, sets)
                     }
-                    "routine" -> {
-                        supabase.postgrest.from("strength_routine_items").delete { filter { eq("routine_id", t.rowId) } }
-                        supabase.postgrest.from("strength_routines").delete { filter { eq("id", t.rowId) } }
+                    val routines = dao.routines().associateBy { it.routine.id }
+                    captured.routines.forEach { r ->
+                        if (routines[r.routine.id] == r) dao.markRoutineSynced(r.routine.id)
                     }
-                    "custom" -> supabase.postgrest.from("strength_custom_exercises").delete { filter { eq("name", t.rowId) } }
+                    val customs = dao.customExercises().associateBy { it.name }
+                    captured.custom.forEach { c ->
+                        if (customs[c.name] == c) dao.markCustomSynced(c.name)
+                    }
+                    captured.deletes.forEach { dao.deleteTombstone(it.tbl, it.rowId) }
                 }
-                dao.deleteTombstone(t.tbl, t.rowId)
-            }.logFailure("syncPending/tombstone").onFailure(::noteFailure)
+            }
+            mergeFromCloudOrThrow()
+            captured.workouts.map { Instant.ofEpochMilli(it.first.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString() }
+                .distinct().forEach { date ->
+                    runCatching { cloud.analyzeStrength(date, force = true) }.logFailure("syncPending/analyze")
+                }
+            dao.pendingSyncCount()
         }
+    }
+}
 
-        firstError?.let { throw it }
-        return dao.pendingSyncCount()
+@Serializable
+internal data class StrengthCloudSnapshot(
+    val workouts: List<CloudWorkout>,
+    val sets: List<CloudSet>,
+    val routines: List<CloudRoutine>,
+    val items: List<CloudRoutineItem>,
+    val custom: List<CloudCustomExercise>,
+)
+
+private data class StrengthUpload(
+    val workouts: List<Pair<WorkoutEntity, List<SetEntity>>>,
+    val routines: List<RoutineWithItems>,
+    val custom: List<CustomExerciseEntity>,
+    val deletes: List<TombstoneEntity>,
+) {
+    fun isNotEmpty() = workouts.isNotEmpty() || routines.isNotEmpty() || custom.isNotEmpty() || deletes.isNotEmpty()
+    fun payload(owner: String, zone: String): JsonObject {
+        val json = Json { encodeDefaults = true }
+        return buildJsonObject {
+            put("p_owner", owner); put("p_zone", zone)
+            put("p_workouts", JsonArray(workouts.map { (w, sets) ->
+                JsonObject(json.encodeToJsonElement(CloudWorkout(w.id,w.name,w.startedAt,w.endedAt,w.durationSec,w.totalVolumeKg,w.note,w.plannedWorkoutId)).jsonObject +
+                    ("sets" to json.encodeToJsonElement(sets.map {
+                        CloudSet(it.id,it.workoutId,it.exerciseName,it.muscle,it.idx,it.weightKg,it.reps,it.rpe,it.isWarmup,it.note,it.quantityUnit)
+                    })))
+            }))
+            put("p_routines", JsonArray(routines.map { r ->
+                JsonObject(json.encodeToJsonElement(CloudRoutine(r.routine.id,r.routine.name,r.routine.createdAt)).jsonObject +
+                    ("items" to json.encodeToJsonElement(r.items.map {
+                        CloudRoutineItem(it.id,it.routineId,it.exerciseName,it.position,it.targetSets,it.targetReps,it.restSec)
+                    })))
+            }))
+            put("p_custom", json.encodeToJsonElement(custom.map { CloudCustomExercise(it.name,it.muscle,it.category,it.compound) }))
+            put("p_deletes", JsonArray(deletes.map { buildJsonObject { put("tbl",it.tbl); put("rowId",it.rowId) } }))
+        }
     }
 }

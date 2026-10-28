@@ -55,7 +55,7 @@ Deno.test("the generation prompts keep the FULL principles", () => {
 
 Deno.test("the digest still carries the rules the coach reasons from", () => {
   const d = CHAT_COACHING_DIGEST;
-  for (const rule of [/80%/, /10%/, /0\.8-1\.3/, /back to back/i, /cold start/i, /RIR 1-3/, /48h/]) {
+  for (const rule of [/80%/, /10%/, /descriptive context/, /back to back/i, /cold start/i, /RIR 1-3/, /48h/]) {
     assert(rule.test(d), `digest lost a load-bearing rule: ${rule}`);
   }
   // The sentence that justifies dropping the rest.

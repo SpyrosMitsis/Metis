@@ -51,6 +51,11 @@ internal fun RestPicker(restSec: Int, onPick: (Int) -> Unit) {
 @Composable
 internal fun RestTimerBar(remaining: Int, vm: StrengthViewModel) {
     val total by vm.restTotal.collectAsStateSafe()
+    RestTimerContent(remaining, total, onAdjust = vm::adjustRest, onSkip = vm::skipRest)
+}
+
+@Composable
+internal fun RestTimerContent(remaining: Int, total: Int, onAdjust: (Int) -> Unit, onSkip: () -> Unit) {
     val target = (if (total > 0) remaining.toFloat() / total else 0f).coerceIn(0f, 1f)
     val progress by animateFloatAsState(targetValue = target, label = "rest-progress")
     val nearDone = remaining in 1..5
@@ -82,9 +87,9 @@ internal fun RestTimerBar(remaining: Int, vm: StrengthViewModel) {
                     color = accent,
                 )
             }
-            TextButton(onClick = { vm.adjustRest(-15) }) { Text("−15s") }
-            TextButton(onClick = { vm.adjustRest(15) }) { Text("+15s") }
-            FilledTonalButton(onClick = { vm.skipRest() }) { Text("Skip") }
+            TextButton(onClick = { onAdjust(-15) }) { Text("−15s") }
+            TextButton(onClick = { onAdjust(15) }) { Text("+15s") }
+            FilledTonalButton(onClick = onSkip) { Text("Skip") }
         }
     }
 }

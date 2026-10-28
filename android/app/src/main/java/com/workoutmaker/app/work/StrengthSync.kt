@@ -27,8 +27,9 @@ class StrengthSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
-        repo.syncPending()
-        Result.success()
+        if (repo.syncPending() == 0) Result.success() else Result.retry()
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
     } catch (_: Exception) {
         // Network/transient failure → let WorkManager retry with backoff, but
         // cap it: a durable server rejection would otherwise retry forever.
@@ -44,10 +45,11 @@ object StrengthSync {
     /** Request a sync. Runs now if online, otherwise as soon as a network appears. */
     fun request(context: Context) {
         val req = OneTimeWorkRequestBuilder<StrengthSyncWorker>()
+            .addTag("account-sync")
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .build()
-        // KEEP: if a sync is already queued/running, don't pile up duplicates.
-        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, req)
+        // Preserve requests made while a worker is finishing its current snapshot.
+        WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
     }
 }

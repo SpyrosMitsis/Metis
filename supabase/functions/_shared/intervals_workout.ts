@@ -1,3 +1,5 @@
+import type { NumericTarget } from "../../../shared/prescription.ts";
+import { assertPrescriptionProjection } from "./prescription.ts";
 // ============================================================================
 // Convert our generic Workout into Intervals.icu's *workout text* syntax.
 //
@@ -93,8 +95,8 @@ function trimNum(v: string): string {
 
 // Rest seconds → a recovery duration token ("90s" under 2 min, else "Nm").
 function restToken(sec: number): string {
-  if (sec < 120) return `${Math.round(sec)}s`;
-  return `${Math.round(sec / 60)}m`;
+  const seconds = Math.round(sec);
+  return seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`;
 }
 
 // The intensity target for an endurance step.
@@ -110,15 +112,19 @@ function renderEnduranceSection(s: WorkoutSection): string[] {
   const out: string[] = [];
   out.push(s.name || "Block");
   for (const e of s.exercises) {
+    // Blank lines delimit repeat groups in Intervals. Without them, a later
+    // exercise in the same section becomes part of the preceding repeat.
+    if (out.length > 1) out.push("");
     const dur = durationToken(e.reps) ?? minutesToken(s, e);
     const target = paceTarget(e);
     const reps = e.sets && e.sets > 1 ? e.sets : 1;
     if (reps > 1) {
       // A repeat block: work step + (if there's rest) a recovery step.
+      if (out[out.length - 1] !== "") out.push("");
       out.push(`${reps}x`);
       out.push(`- ${dur} ${target}`);
       if (e.rest_seconds && e.rest_seconds > 0) {
-        out.push(`- ${restToken(e.rest_seconds)} Z1 Pace`);
+        out.push(`- ${restToken(e.rest_seconds)} Z1 ${target.endsWith(" HR") ? "HR" : "Pace"}`);
       }
     } else {
       out.push(`- ${dur} ${target}`);
@@ -157,9 +163,45 @@ function renderStrengthSections(w: Pick<Workout, "sections">): string {
   return parts.join("\n\n");
 }
 
+function numericTransport(t?: NumericTarget): string {
+  if (!t) return "";
+  if (t.kind === "power_watts") return `${t.min}-${t.max}w`;
+  const pace = (seconds: number) => {
+    const rounded = Math.round(seconds);
+    return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
+  };
+  if (t.kind === "pace_seconds_per_km" || t.kind === "pace_seconds_per_100m") {
+    const unit = t.kind === "pace_seconds_per_km" ? "km" : "100m";
+    // The unit qualifies the complete range, not each bound.
+    return `${pace(t.min)}-${pace(t.max)}/${unit} Pace`;
+  }
+  return ""; // Absolute bpm is retained as a cue, never mislabeled as %HRmax.
+}
+
 // Render a full Workout to Intervals.icu description text. The coach note is
 // appended at the END as plain prose so it never disrupts step parsing.
 export function renderIntervalsWorkout(w: Workout): string {
+  if (w.prescription && ["run", "ride", "swim"].includes(w.type)) {
+    assertPrescriptionProjection(w);
+    const lines: string[] = [];
+    for (const b of w.prescription.blocks) {
+      if (b.kind !== "endurance") continue;
+      lines.push(`${b.role}: ${b.label}. Effort ${b.target.min}-${b.target.max}/10${b.stroke ? `. ${b.stroke}` : ""}${b.numeric_target?.kind === "heart_rate_bpm" ? `. HR guide ${b.numeric_target.min}-${b.numeric_target.max} bpm (instruction only)` : ""}`);
+      for (let i = 0; i < b.repetitions; i++) {
+        // Distances use explicit metres; m alone means minutes to the provider.
+        // Export declared zone goals; older effort-only prescriptions retain their original transport.
+        const duration = b.distance ? `${b.distance.value * (b.distance.unit === "yd" ? 0.9144 : 1)}mtr` : `${b.work_seconds}s`;
+        const zoneUnit = w.type === "ride" ? "HR" : "Pace";
+        const declaredZone = w.prescription.presentation_version === 4 ? b.intensity_zone : undefined;
+        const target = numericTransport(b.numeric_target) || (declaredZone ? `${declaredZone} ${zoneUnit}` : "");
+        lines.push(`- ${duration}${target ? " " + target : ""}`);
+        if (b.recovery_seconds && (i < b.repetitions - 1 || b.recovery_after_last)) lines.push(`- ${b.recovery_seconds}s${b.recovery_mode === "stationary" ? " intensity=rest" : declaredZone ? ` Z1 ${zoneUnit}` : ""}`);
+      }
+      if (b.transition_seconds) lines.push(`- ${b.transition_seconds}s`);
+      lines.push("");
+    }
+    return [...lines, w.coach_note].join("\n").trim();
+  }
   const body = w.type === "run" || w.type === "ride"
     ? w.sections.map((s) => renderEnduranceSection(s).join("\n")).join("\n\n")
     : renderStrengthSections(w);

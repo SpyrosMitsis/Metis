@@ -34,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.workoutmaker.app.ui.components.SectionCard
+import com.workoutmaker.app.ui.components.WorkoutChoice
+import com.workoutmaker.app.data.workoutChoiceRequest
 import java.time.LocalDate
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -98,6 +100,7 @@ internal fun RequestSessionDialog(date: LocalDate, onDismiss: () -> Unit, onSubm
     var day by remember { mutableStateOf(date) }
     var text by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("auto") }
+    var focus by remember { mutableStateOf("") }
     var showPicker by remember { mutableStateOf(false) }
 
     if (showPicker) {
@@ -116,26 +119,22 @@ internal fun RequestSessionDialog(date: LocalDate, onDismiss: () -> Unit, onSubm
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(enabled = text.isNotBlank(), onClick = { onSubmit(day, text.trim(), type) }) { Text("Create & lock") }
+            TextButton(enabled = text.isNotBlank() || type != "auto", onClick = { onSubmit(day, workoutChoiceRequest(type, focus, text), type) }) { Text("Create & lock") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
         title = { Text("AI session for a day") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.EditCalendar, null); Text("  $day")
                 }
+                WorkoutChoice(type, focus, { type = it }, { focus = it })
                 OutlinedTextField(
                     text, { text = it },
                     label = { Text("What's the plan?") },
                     placeholder = { Text("e.g. social 10k run with friends, keep it easy") },
                     modifier = Modifier.fillMaxWidth(), minLines = 2,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("auto" to "Auto", "run" to "Run", "ride" to "Ride", "strength" to "Strength").forEach { (k, label) ->
-                        FilterChip(selected = type == k, onClick = { type = k }, label = { Text(label) })
-                    }
-                }
                 Text("It'll be 🔒 locked, your weekly AI re-plan will schedule around it, not over it.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

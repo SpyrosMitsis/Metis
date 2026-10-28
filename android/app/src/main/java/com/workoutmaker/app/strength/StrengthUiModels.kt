@@ -34,6 +34,9 @@ class UiSet(
 
 class UiExercise(val name: String) {
     val muscle: String = ExerciseCatalog.muscleOf(name)
+    var quantityUnit by mutableStateOf(if (ExerciseCatalog.isCardio(name)) "minutes" else ExerciseMetadataCatalog.byName[name]?.quantityUnit ?: "reps")
+    val isBand: Boolean get() = ExerciseCatalog.find(name)?.category == "Band"
+    val needsWeight: Boolean get() = !isCardio && !isBand && ExerciseCatalog.find(name)?.category != "Bodyweight"
     var restSec by mutableStateOf(ExerciseCatalog.restOf(name))
     val sets = mutableStateListOf<UiSet>()
     var previous by mutableStateOf<List<SetEntity>>(emptyList())
@@ -53,7 +56,7 @@ internal fun kg(v: Double): String =
 // suggestion overrides any plan-seeded placeholder.
 internal fun applySuggestion(ux: UiExercise, sug: ProgressionSuggestion?) {
     ux.suggestion = sug
-    if (sug == null) return
+    if (sug == null || ux.quantityUnit != "reps" || ux.isBand) return
     ux.sets.forEach { s ->
         if (s.weight.isBlank()) s.suggestedWeight = kg(sug.weightKg)
         if (s.reps.isBlank()) s.suggestedReps = sug.reps.toString()

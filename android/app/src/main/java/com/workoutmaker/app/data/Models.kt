@@ -37,6 +37,7 @@ data class WorkoutExercise(
     val muscle: String? = null,
     val category: String? = null,
     val compound: Boolean? = null,
+    val dose: kotlinx.serialization.json.JsonObject? = null,
 )
 
 @Serializable
@@ -55,6 +56,7 @@ data class Workout(
     val rpe_target: Double = 0.0,
     val sections: List<WorkoutSection> = emptyList(),
     val coach_note: String = "",
+    val prescription: kotlinx.serialization.json.JsonObject? = null,
 )
 
 @Serializable
@@ -70,6 +72,11 @@ data class PlannedWorkout(
     val locked: Boolean = false,
     val skipped: Boolean = false,
     val created_at: String? = null,
+    val reconciliation_status: String = "unknown",
+    val activity_ids: List<String> = emptyList(),
+    val session_slot: Int = 0,
+    val start_minute: Int? = null,
+    val combined_group: String? = null,
 )
 
 @Serializable
@@ -191,6 +198,9 @@ data class SessionDebrief(
 )
 
 @Serializable
+data class ReadinessContext(val status:String="unknown",val score:Int?=null,val basis:String="none",val observations:List<String> = emptyList(),val conflicts:List<String> = emptyList(),val next_action:String="",val limits:String="")
+
+@Serializable
 data class DailySummary(
     val date: String,
     val readiness: Readiness,
@@ -213,6 +223,7 @@ data class DailySummary(
     val injury_checkin: InjuryCheckin? = null,
     val pain_check: PainCheck? = null,
     val injury_backoff: List<InjuryBackoff> = emptyList(),
+    val readiness_context: ReadinessContext? = null,
 )
 
 // "Is your knee still bothering you?", surfaced a few days after the athlete

@@ -79,3 +79,25 @@ jobs:
         # migration crash waiting to happen on a user's device — fail here
         # instead.
         run: git diff --exit-code -- app/schemas
+
+  engine-quality:
+    name: Engine scenarios and transaction contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Isolated PostgreSQL scenarios
+        run: python3 scripts/engine-tests/run.py | tee "$RUNNER_TEMP/engine-database.log"
+      - name: Existing-row Room migration contract
+        run: python3 scripts/engine-tests/room_migration.py
+      - name: Production prescription matrix and multiweek review packet
+        run: deno run --allow-read --allow-write --allow-env scripts/engine-eval/run.ts "$RUNNER_TEMP/engine-evaluation" --transaction-evidence "$RUNNER_TEMP/engine-database.log"
+      - name: Preserve review evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-quality-evidence
+          path: |
+            ${{ runner.temp }}/engine-evaluation
+            ${{ runner.temp }}/engine-database.log

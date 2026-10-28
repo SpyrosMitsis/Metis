@@ -70,6 +70,7 @@ Deno.serve(async (req) => {
         name: a.name ?? a.type ?? "Activity",
         type: a.type ?? "",
         distance_km: a.distance ? round1(a.distance / 1000) : null,
+        intervals_id: a.id != null ? String(a.id) : null,
         duration_min: a.moving_time ? Math.round(a.moving_time / 60) : null,
         tss: a.icu_training_load ?? null,
         avg_hr: a.average_heartrate ? Math.round(a.average_heartrate) : null,

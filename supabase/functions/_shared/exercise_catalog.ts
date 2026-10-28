@@ -1,9 +1,8 @@
 // Canonical strength-exercise catalog — a server-side mirror of the Android
 // app's bundled ExerciseCatalog (the list the athlete sees in the logger's
 // picker). The AI generators inject this so every prescribed strength exercise
-// matches a loggable entry by exact name; anything genuinely new the model
-// introduces is registered into the athlete's strength_custom_exercises with
-// its metadata so stats/muscle grouping keep working on every client.
+// matches a bundled entry by exact name. Manual custom exercises remain valid
+// for logging history, but generation cannot create or prescribe custom entries.
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { Workout } from "./types.ts";
@@ -19,6 +18,40 @@ const E = (name: string, muscle: string, category: string, compound = false): Ca
   ({ name, muscle, category, compound });
 
 export const EXERCISE_CATALOG: CatalogExercise[] = [
+  E("Wall Push-Up", "Chest", "Bodyweight", true),
+  E("Resistance Band Row", "Back", "Band", true),
+  E("Resistance Band Chest Press", "Chest", "Band", true),
+  E("Resistance Band Pull-Apart", "Shoulders", "Band", false),
+  E("Resistance Band Bicep Curl", "Biceps", "Band", false),
+  E("Resistance Band Lateral Raise", "Shoulders", "Band", false),
+
+  // Additional home and gym variations (mirrored on server and Android).
+  E("Incline Push-Up", "Chest", "Bodyweight", true),
+  E("Dumbbell Floor Press", "Chest", "Dumbbell", true),
+  E("Chest-Supported Dumbbell Row", "Back", "Dumbbell", true),
+  E("Assisted Pull-Up", "Back", "Machine", true),
+  E("Inverted Row", "Back", "Bodyweight", true),
+  E("Pike Push-Up", "Shoulders", "Bodyweight", true),
+  E("Dumbbell Shrug", "Shoulders", "Dumbbell"),
+  E("Bodyweight Squat", "Quads", "Bodyweight", true),
+  E("Reverse Lunge (Bodyweight)", "Quads", "Bodyweight", true),
+  E("Split Squat (Bodyweight)", "Quads", "Bodyweight", true),
+  E("Reverse Lunge (Dumbbell)", "Quads", "Dumbbell", true),
+  E("Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", true),
+  E("Single-Leg Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", true),
+  E("Glute Bridge (Bodyweight)", "Glutes", "Bodyweight", true),
+  E("Single-Leg Glute Bridge", "Glutes", "Bodyweight", true),
+  E("Hip Thrust (Dumbbell)", "Glutes", "Dumbbell", true),
+  E("Standing Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+  E("Single-Leg Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+  E("Standing Calf Raise (Dumbbell)", "Calves", "Dumbbell"),
+  E("Side Plank", "Core", "Bodyweight"),
+  E("Dead Bug", "Core", "Bodyweight"),
+  E("Bird Dog", "Core", "Bodyweight"),
+  E("Pallof Press", "Core", "Cable"),
+  E("Reverse Crunch", "Core", "Bodyweight"),
+  E("Kettlebell Goblet Squat", "Quads", "Kettlebell", true),
+  E("Kettlebell Deadlift", "Hamstrings", "Kettlebell", true),
   // ---- Chest ----
   E("Barbell Bench Press", "Chest", "Barbell", true),
   E("Incline Barbell Bench Press", "Chest", "Barbell", true),
@@ -133,7 +166,7 @@ export const MUSCLES = [
 ];
 
 export const CATEGORIES = [
-  "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio",
+  "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Band", "Cardio",
 ];
 
 const normName = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -143,8 +176,9 @@ const catalogByNorm = new Map(EXERCISE_CATALOG.map((e) => [normName(e.name), e])
 // CATEGORIES they can actually train with. Returns null for an unknown/blank
 // value → callers then DON'T filter (fail open). Equipment tiers are inclusive.
 const EQUIPMENT_CATEGORIES: Record<string, string[]> = {
+  "resistance bands": ["Bodyweight", "Band"],
   "bodyweight": ["Bodyweight"],
-  "dumbbells": ["Bodyweight", "Dumbbell", "Kettlebell"],
+  "dumbbells": ["Bodyweight", "Dumbbell"],
   "barbell + rack": ["Bodyweight", "Dumbbell", "Kettlebell", "Barbell"],
   "full gym": ["Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio"],
 };
@@ -202,34 +236,25 @@ export function compoundForName(name: string, custom: CatalogExercise[] = []): b
   return catalogByNorm.get(n)?.compound ?? catalogByFuzz.get(fuzzName(name))?.compound ?? false;
 }
 
-/**
- * Snap each strength exercise the model named to a loggable catalog entry when
- * it's clearly a re-worded duplicate (e.g. "Machine Lat Pulldown" → "Lat
- * Pulldown"), copying the catalog's correct metadata. Genuinely new exercises
- * are left as-is for registerUnknownExercises to record as deletable customs.
- * Mutates the workout in place. Best-effort.
- */
-export function canonicalizeStrengthExercises(
-  workout: Workout,
-  custom: CatalogExercise[],
-): void {
-  if (workout.type !== "strength") return;
-  const customNorms = new Set(custom.map((c) => normName(c.name)));
-  for (const sec of workout.sections ?? []) {
-    for (const ex of sec.exercises ?? []) {
-      const n = normName(ex.name);
-      if (!n || catalogByNorm.has(n) || customNorms.has(n)) continue; // already loggable
-      const match = catalogByFuzz.get(fuzzName(ex.name));
-      if (match) {
-        ex.name = match.name;
-        // Replace any stray AI metadata with the catalog's canonical values.
-        const m = ex as { muscle?: string; category?: string; compound?: boolean };
-        m.muscle = match.muscle;
-        m.category = match.category;
-        m.compound = match.compound;
+/** Enforce the bundled library without guessing equipment or movement variants.
+ * Returns removed names so generation can request a repair. Manual custom
+ * exercises and historical logs are deliberately unaffected. */
+export function enforceStrengthCatalog(workout: Workout): string[] {
+  if (workout.type !== "strength") return [];
+  const removed: string[] = [];
+  for (const section of workout.sections) {
+    section.exercises = section.exercises.filter((exercise) => {
+      const entry = catalogByNorm.get(normName(exercise.name));
+      if (!entry) {
+        removed.push(exercise.name);
+        return false;
       }
-    }
+      Object.assign(exercise, entry);
+      return true;
+    });
   }
+  workout.sections = workout.sections.filter((section) => section.exercises.length > 0);
+  return removed;
 }
 
 /** The athlete's custom exercises (best-effort; empty on any failure). */
@@ -269,21 +294,17 @@ async function loggedRepertoire(
 }
 
 // Prompt block: pins strength exercise names to the loggable catalog and sets
-// the rules for cardio entries and for the rare genuinely-new exercise.
+// the rules for cardio entries. Generation is restricted to bundled entries.
 export async function exerciseCatalogBlock(
   admin: SupabaseClient,
   userId: string,
 ): Promise<string> {
-  const custom = await customExercises(admin, userId);
-  const repertoire = await loggedRepertoire(admin, userId);
+  const repertoire = (await loggedRepertoire(admin, userId)).filter((name) => catalogByNorm.has(normName(name)));
   const byMuscle = new Map<string, string[]>();
   for (const e of EXERCISE_CATALOG) {
     byMuscle.set(e.muscle, [...(byMuscle.get(e.muscle) ?? []), e.name]);
   }
   const lines = [...byMuscle.entries()].map(([m, names]) => `- ${m}: ${names.join(", ")}`);
-  const customLine = custom.length
-    ? `\n- Athlete's custom exercises (also valid): ${custom.map((c) => c.name).join(", ")}`
-    : "";
   const repertoireBlock = repertoire.length
     ? `\n\nTHE ATHLETE'S OWN REPERTOIRE, exercises they actually log (this is what their gym's ` +
       `machines and their preferences support): ${repertoire.join(", ")}.\n` +
@@ -292,54 +313,12 @@ export async function exerciseCatalogBlock(
       `when it has nothing for a muscle/pattern the session needs.`
     : "";
   return `\n\nSTRENGTH EXERCISE LIBRARY (the athlete logs sessions against this list, names must match EXACTLY):\n` +
-    lines.join("\n") + customLine + repertoireBlock + `\n` +
+    lines.join("\n") + repertoireBlock + `\n` +
     `Rules for strength exercises:\n` +
     `- Every strength exercise "name" MUST be copied character-for-character from the library above.\n` +
-    `- Only if something essential is truly missing may you introduce a new exercise; in that case you MUST also set ` +
-    `"muscle" (one of: ${MUSCLES.join(", ")}) and "category" (one of: ${CATEGORIES.join(", ")}) and "compound" (true/false) on that exercise object.\n` +
+    `- Never invent exercises or prescribe custom entries. Choose an appropriate library alternative; if none fits the constraints, omit it.\n` +
     `- For any cardio / conditioning / warm-up cardio block you MUST pick one of the Cardio library entries by exact name (${
       EXERCISE_CATALOG.filter((e) => e.muscle === "Cardio").map((e) => e.name).join(", ")
     }). NEVER invent a generic name like "Light Cardio", "Cardio", "Conditioning" or "HIIT".\n` +
     `- Cardio entries are logged in MINUTES: set "reps" to the duration like "10 min", sets to the number of intervals, and "weight_kg" to null.`;
-}
-
-/**
- * Register exercises the model invented (not in the catalog or the athlete's
- * customs) into strength_custom_exercises, carrying the AI's metadata, so the
- * pickers/stats on both clients recognise them. Best-effort.
- */
-export async function registerUnknownExercises(
-  admin: SupabaseClient,
-  userId: string,
-  workout: Workout,
-): Promise<void> {
-  try {
-    if (workout.type !== "strength") return;
-    const custom = await customExercises(admin, userId);
-    const known = new Set([...catalogByNorm.keys(), ...custom.map((c) => normName(c.name))]);
-    const rows: { user_id: string; name: string; muscle: string; category: string; compound: boolean }[] = [];
-    for (const sec of workout.sections ?? []) {
-      for (const ex of sec.exercises ?? []) {
-        const n = normName(ex.name);
-        if (!n || known.has(n)) continue;
-        known.add(n);
-        const meta = ex as { muscle?: string | null; category?: string | null; compound?: boolean | null };
-        rows.push({
-          user_id: userId,
-          name: ex.name.trim(),
-          muscle: meta.muscle && MUSCLES.includes(meta.muscle) ? meta.muscle : "Other",
-          category: meta.category && CATEGORIES.includes(meta.category) ? meta.category : "Machine",
-          compound: meta.compound === true,
-        });
-      }
-    }
-    if (rows.length) {
-      await admin.from("strength_custom_exercises").upsert(rows, {
-        onConflict: "user_id,name",
-        ignoreDuplicates: true,
-      });
-    }
-  } catch (_e) {
-    // best-effort — generation must not fail because registration did
-  }
 }

@@ -87,7 +87,7 @@ class DeviceCalendarManager @Inject constructor(
 
     // ---- WRITE: planned workouts as all-day events --------------------------
 
-    data class PlanEntry(val date: String, val title: String, val detail: String)
+    data class PlanEntry(val date: String, val title: String, val detail: String, val startMinute: Int? = null, val durationMinutes: Double = 0.0)
 
     /**
      * Replace our events in [from, from+days) with [entries]. Delete-then-insert
@@ -97,8 +97,8 @@ class DeviceCalendarManager @Inject constructor(
         if (!hasWritePermission()) return
         val calId = ensureAppCalendar() ?: writableCalendarId() ?: return
         runCatching {
-            val startUtc = from.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val endUtc = from.plusDays(days.toLong()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+            val startUtc = minOf(from.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(), from.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())
+            val endUtc = maxOf(from.plusDays(days.toLong()).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(), from.plusDays(days.toLong()).atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli())
             // Delete across ALL calendars (not just ours): earlier builds wrote
             // MARKER events into the primary calendar, and this migrates them
             // into the app calendar on the next re-sync.
@@ -111,7 +111,9 @@ class DeviceCalendarManager @Inject constructor(
             for (e in entries) {
                 val date = runCatching { LocalDate.parse(e.date) }.getOrNull() ?: continue
                 if (date < from || date >= from.plusDays(days.toLong())) continue
-                val dayUtc = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+                val timed = e.startMinute != null && e.durationMinutes > 0
+                val zone = java.time.ZoneId.systemDefault()
+                val dayUtc = if (timed) date.atTime(e.startMinute!! / 60, e.startMinute % 60).atZone(zone).toInstant().toEpochMilli() else date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
                 context.contentResolver.insert(
                     CalendarContract.Events.CONTENT_URI,
                     ContentValues().apply {
@@ -119,9 +121,9 @@ class DeviceCalendarManager @Inject constructor(
                         put(CalendarContract.Events.TITLE, e.title)
                         put(CalendarContract.Events.DESCRIPTION, "${e.detail}\n\n$MARKER")
                         put(CalendarContract.Events.DTSTART, dayUtc)
-                        put(CalendarContract.Events.DTEND, dayUtc + 86_400_000L)
-                        put(CalendarContract.Events.ALL_DAY, 1)
-                        put(CalendarContract.Events.EVENT_TIMEZONE, "UTC")
+                        put(CalendarContract.Events.DTEND, dayUtc + if (timed) (e.durationMinutes * 60_000).toLong() else 86_400_000L)
+                        put(CalendarContract.Events.ALL_DAY, if (timed) 0 else 1)
+                        put(CalendarContract.Events.EVENT_TIMEZONE, if (timed) zone.id else "UTC")
                         // A workout is a to-do on the day banner, not a busy slot:
                         // it must never block the busy-signal reading above.
                         put(CalendarContract.Events.AVAILABILITY, CalendarContract.Events.AVAILABILITY_FREE)

@@ -31,7 +31,10 @@ data class PlanStatus(
 
 @Serializable
 data class GenerateRequest(
-    val date: String? = null,
+    val session_slot: Int = 0,
+    val objective: String? = null,
+    val request_id: String = java.util.UUID.randomUUID().toString(),
+    val date: String? = java.time.LocalDate.now().toString(),
     val type: String = "auto",
     // null → the server derives length from the profile preference/max and
     // treats it as flexible guidance instead of a fixed number.
@@ -75,7 +78,9 @@ data class WeatherCheckResult(
 
 @Serializable
 data class PlanWeekRequest(
-    val start_date: String? = null,
+    val request_id: String = java.util.UUID.randomUUID().toString(),
+    val today: String = java.time.LocalDate.now().toString(),
+    val start_date: String? = java.time.LocalDate.now().toString(),
     val push: Boolean = true,
     // The week's busy windows from the device calendar (opt-in; times only, no
     // titles) so the planner puts hard/long sessions on the free days.
@@ -117,6 +122,7 @@ data class PlanWeekResult(
 
 @Serializable
 data class ScheduleRequest(
+    val request_id: String = java.util.UUID.randomUUID().toString(),
     val template_id: String,
     val start_date: String? = null,
     val push: Boolean = true,

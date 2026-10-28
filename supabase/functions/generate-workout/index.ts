@@ -1,3 +1,15 @@
+import { slotKey, sessionWindows } from "../_shared/session_slots.ts";
+import { constrainSession } from "../_shared/review_context.ts";
+import { compileProposal, compileWithRepairs } from "../_shared/proposal_compiler.ts";
+import { requestedWorkoutSport } from "../_shared/workout_intent.ts";
+import { getWeather, assessViability, type WeatherSnapshot } from "../_shared/weather.ts";
+import { categoryOfExercise } from "../_shared/exercise_catalog.ts";
+import { buildSession, eligibleSessionExercises, sessionProposalLimits, SESSION_POLICY } from "../_shared/session_engine.ts";
+import { dailyMinutes, explicitImplements, sessionState, remainingWeekMinutes } from "../_shared/session_context.ts";
+import { deriveProgramState, programGoals } from "../_shared/program_state.ts";
+import type { SessionObjective, TrainingSport } from "../../../shared/prescription.ts";
+import { assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // generate-workout — the full AI generation flow.
 //
 // POST { date?: "YYYY-MM-DD", type?: "run"|"strength"|"auto", duration?: number, push?: boolean }
@@ -10,7 +22,7 @@
 
 import { errorStatus, handleOptions, json } from "../_shared/cors.ts";
 import { logger } from "../_shared/log.ts";
-import { adminClient, decryptSecret, getUserId, PROFILE_COLUMNS_GENERATION, type ProfileRow } from "../_shared/supabase.ts";
+import { adminClient, getUserId, PROFILE_COLUMNS_GENERATION, type ProfileRow } from "../_shared/supabase.ts";
 import {
   customPriceFromProfile,
   estimateCostUsd,
@@ -28,9 +40,8 @@ import {
   validateWorkout,
   WORKOUT_TOOL_SCHEMA,
 } from "../_shared/prompt.ts";
-import { createEvent, deleteEvent, latestFitness } from "../_shared/intervals.ts";
+import { latestFitness } from "../_shared/intervals.ts";
 import { applyFallbackFitness } from "../_shared/load.ts";
-import { renderIntervalsWorkout } from "../_shared/intervals_workout.ts";
 import {
   adherenceBlock,
   calendarBlock,
@@ -49,11 +60,9 @@ import { memoryDocsBlock, memoryFromProfile } from "../_shared/agent_memory.ts";
 import { computeRecovery } from "../_shared/recovery.ts";
 import { llmAccess } from "../_shared/llm_keys.ts";
 import {
-  canonicalizeStrengthExercises,
   compoundForName,
   customExercises,
   exerciseCatalogBlock,
-  registerUnknownExercises,
 } from "../_shared/exercise_catalog.ts";
 import { type MainLift, reviewWorkout } from "../_shared/workout_review.ts";
 import { activeBackoffs, backoffBlock, sportsToAvoid, substituteSport } from "../_shared/injury.ts";
@@ -78,8 +87,25 @@ Deno.serve(async (req) => {
 
     const admin = adminClient();
     const body = await req.json().catch(() => ({}));
-    const date: string = body.date ?? new Date().toISOString().slice(0, 10);
-    const requestedType: string = body.type ?? "auto";
+    const date = isoDate(body.date ?? new Date().toISOString().slice(0, 10));
+    const slot = body.session_slot ?? 0;
+    if (!Number.isInteger(slot) || slot < 0 || slot > 1) throw new PlanError("Invalid session slot", 400, "SESSION_SLOT");
+    const generationId = requestId(body.request_id);
+    const scope = { ...body, date };
+    const cached = await savedRequest(admin,userId,generationId,scope);
+    if (cached) {
+      const storedRows = (cached.rows ?? []) as Array<Record<string,unknown>>;
+      const row = storedRows[0];
+      if (!row) throw new Error("Saved generation result is incomplete");
+      const sync = await drainCalendarOutbox(admin,userId);
+      return json({ workout: row.workout_json, workout_id: row.id, provider: row.llm_provider,
+        model: row.llm_model, estimated_cost_usd: 0, fallback_attempts: [],
+        intervals_event_id: row.intervals_event_id ?? null, push_error: sync.error,
+        review_violations: cached.review_violations ?? [], review_issues: cached.review_issues ?? [],
+        tss_replaced: null, replayed: true });
+    }
+    const revision = await planRevision(admin, userId);
+    const requestedType = requestedWorkoutSport(body);
     const shouldPush: boolean = body.push ?? true;
     log.info("request", { date, requestedType, push: shouldPush, hasRequest: !!body.request });
 
@@ -92,6 +118,7 @@ Deno.serve(async (req) => {
     const profile = profileRow as ProfileRow | null;
     if (!profile) return json({ error: "profile not found" }, 404);
     const onboarding = profile.onboarding ?? {};
+    let observedWeather: WeatherSnapshot | null | undefined;
 
     // Session length is guidance, not a fixed number: an explicit request wins,
     // otherwise the profile preference (+ optional max) becomes a flexible
@@ -113,8 +140,8 @@ Deno.serve(async (req) => {
     const since28 = new Date(Date.now() - 28 * DAY).toISOString().slice(0, 10);
     const since14 = new Date(Date.now() - 14 * DAY).toISOString().slice(0, 10);
     const { data: activities } = await admin
-      .from("completed_activities")
-      .select("type, date, distance_m, tss, ctl, atl")
+      .from("effective_activities")
+      .select("type, date, distance_m, tss, ctl, atl, planned_workout_id, link_source")
       .eq("user_id", userId)
       .gte("date", since28)
       .order("date", { ascending: false });
@@ -190,7 +217,7 @@ Deno.serve(async (req) => {
     const dayAfter = new Date(now.getTime() + DAY).toISOString().slice(0, 10);
     const weekAhead = new Date(now.getTime() + 6 * DAY).toISOString().slice(0, 10);
     const { data: aroundPlanned } = await admin
-      .from("planned_workouts")
+      .from("reconciled_session_plans")
       .select("date, type, workout_json")
       .eq("user_id", userId)
       .gte("date", dayBefore).lte("date", weekAhead).neq("date", date)
@@ -340,7 +367,7 @@ Deno.serve(async (req) => {
             lastSets: sets.length,
             // The app's double-progression target — prompt + review keep the
             // plan's numbers identical to the logger's ↗ target.
-            target: nextTarget(sets, compoundForName(r.exercise_name, strengthCustom)),
+            target: categoryOfExercise(r.exercise_name) === "Band" || /assisted/i.test(r.exercise_name) ? null : nextTarget(sets, compoundForName(r.exercise_name, strengthCustom)),
           };
         });
 
@@ -348,10 +375,12 @@ Deno.serve(async (req) => {
       // first session read "no recent logs (conservative)". starting_lifts
       // (the optional "Your numbers" step) gives the progression engine a
       // floor from day one; real logs take over the moment one exists.
-      if (mainLifts.length === 0 && Array.isArray(onboarding.starting_lifts)) {
-        mainLifts = (onboarding.starting_lifts as { exercise?: string; weight_kg?: number; reps?: number }[])
+      if (Array.isArray(onboarding.starting_lifts)) {
+        const knownLifts = new Set(mainLifts.map(l=>l.exercise));
+        mainLifts = [...mainLifts, ...(onboarding.starting_lifts as { exercise?: string; weight_kg?: number; reps?: number }[])
           .filter((l) => typeof l?.exercise === "string" && l.exercise.trim() &&
             typeof l.weight_kg === "number" && l.weight_kg > 0 && l.weight_kg <= 400)
+          .filter(l => !knownLifts.has(l.exercise!.trim()))
           .slice(0, 5)
           .map((l) => {
             const reps = typeof l.reps === "number" && l.reps > 0 && l.reps <= 30 ? l.reps : 5;
@@ -366,7 +395,7 @@ Deno.serve(async (req) => {
               lastSets: 1,
               target: nextTarget(seedSets, compoundForName(l.exercise!.trim(), strengthCustom)),
             };
-          });
+          })];
       }
 
       // The 4-tier label gates safety filtering; the detail list tells the
@@ -403,7 +432,7 @@ Deno.serve(async (req) => {
         body: bodyComposition(onboarding),
         bodyTrend: bodyTrendLine,
       });
-      // Pin exercise names to the loggable catalog (+ the athlete's customs).
+      // Pin exercise names to the loggable bundled catalog.
       userPrompt += await exerciseCatalogBlock(admin, userId);
     } else if (type === "rest") {
       userPrompt = `Generate a REST day. Goal: ${goal}. Recent 3-day wellness energy ${wellness3d.energy.toFixed(1)}/5, soreness ${wellness3d.soreness.toFixed(1)}/5. Return JSON only.`;
@@ -475,7 +504,7 @@ Deno.serve(async (req) => {
       const win = (offset: number) =>
         new Date(now.getTime() + offset * DAY).toISOString().slice(0, 10);
       const { data: neighbors } = await admin
-        .from("planned_workouts")
+        .from("reconciled_session_plans")
         .select("date, type, workout_json")
         .eq("user_id", userId)
         .gte("date", win(-2)).lte("date", win(2)).neq("date", date)
@@ -514,7 +543,8 @@ Deno.serve(async (req) => {
         const lat = typeof body.lat === "number" ? body.lat : profile.last_lat;
         const lon = typeof body.lon === "number" ? body.lon : profile.last_lon;
         if (typeof lat === "number" && typeof lon === "number") {
-          userPrompt += await weatherBlock(lat, lon, type);
+          observedWeather = await getWeather(lat, lon);
+          userPrompt += await weatherBlock(lat, lon, type, observedWeather);
         }
       }
     }
@@ -526,12 +556,14 @@ Deno.serve(async (req) => {
 
     // 6c. "adjust this workout" path — revise a base workout per instruction
     if (body.adjustment && body.base_workout) {
-      const catalogNote = (body.base_workout as { type?: string }).type === "strength"
+      const catalogNote = type === "strength"
         ? await exerciseCatalogBlock(admin, userId)
         : "";
       userPrompt =
         `Revise the following workout per the athlete's request, keeping it
 physiologically sound and honoring the same training science.
+
+REQUIRED SPORT: ${type}. Return type "${type}". When this differs from the current workout, build a replacement for the selected sport instead of preserving the old sport's exercises.
 
 ATHLETE REQUEST: ${String(body.adjustment).slice(0, 1000)}
 
@@ -548,13 +580,80 @@ Return the revised workout as JSON only, same schema.`;
     // guarantees it; this is so the coach note can explain itself.
     userPrompt += backoffBlock(backoffs);
 
+    const reviewCtx = {
+      catalogOnly: true,
+      mainLifts,
+      weeklySetsByMuscle,
+      muscleGroupsLast48h,
+      tsb: fitness.tsb,
+      daysSinceLastHard,
+      experience: experienceForSport(onboarding, type),
+      // Structured safety: injuries on file (coach_knowledge is separate free
+      // text, covered by the prompt-level instruction, not this backstop).
+      injuries: injuriesOf(onboarding),
+      // Dated pain backoffs, enforced structurally (strip / intensity cap) the
+      // same way the contraindication engine is.
+      backoffs,
+      // Deterministic intensity ceiling + equipment hard-filter. The basis
+      // rides along: an unmeasured 50 must not cap anything.
+      readiness: recovery.score,
+      readinessBasis: recovery.basis,
+      equipment: onboarding.equipment as string | undefined,
+      implements: explicitImplements(onboarding),
+      maxMinutes: dailyMinutes(onboarding, date) ?? undefined,
+    };
+    // Explicit structured requests do not need a model or an API key. Free-text
+    // requests retain the existing interpreter path until intent is structured.
+    const structuredObjective = body.objective ?? (onboarding.prescription_engine === "deterministic" && !body.request && !body.adjustment
+      ? type === "strength" ? "strength" : type === "rest" ? "rest" : "easy" : null);
+    if (structuredObjective != null) {
+      const state = await sessionState(admin, userId, onboarding, date, type as TrainingSport, body.duration, slot);
+      if (type === "run" || type === "ride") {
+        const lat = typeof body.lat === "number" ? body.lat : profile.last_lat;
+        const lon = typeof body.lon === "number" ? body.lon : profile.last_lon;
+        if (typeof lat === "number" && typeof lon === "number") {
+          const weather = observedWeather === undefined ? await getWeather(lat, lon) : observedWeather;
+          if (weather?.localDate === date) state.conditions = { date, ...assessViability(weather, type) };
+        }
+      }
+      state.weekly_remaining_minutes = await remainingWeekMinutes(admin, userId, onboarding, date, new Set([slotKey(date, slot)]), state.actual);
+      state.fatigue = fitness.tsb < -20 || recovery.basis !== "none" && recovery.score < 66 ? "high" :
+        recovery.basis !== "none" ? "normal" : "unknown";
+      const program = deriveProgramState(date, programGoals(onboarding, [type as TrainingSport], goalRace ? [goalRace] : []), state.actual, state.history_complete, onboarding);
+      state.program = program.sports[0];
+      const candidate = buildSession(constrainSession(state, reviewCtx), (body.objective ?? (type === "strength" ? state.program?.preferred_objective : null) ?? structuredObjective) as SessionObjective);
+      const reviewed = reviewGeneratedWorkout(candidate, reviewCtx);
+      // Content review may lower a dose. Never keep stale structured blocks
+      // when a legacy correction changed their display projection.
+      assertPublishable(reviewed.corrected, reviewCtx);
+      const saved = await replacePlan(admin, userId, generationId, scope, revision, date, date, [{
+        date, session_slot: slot, start_minute: sessionWindows(onboarding, date).find(w => w.slot === slot)?.start_minute, type: candidate.type, workout_json: reviewed.corrected, llm_model: SESSION_POLICY.version,
+        locked: body.lock === true, sync_requested: shouldPush,
+      }], null, { program_state: program, athlete_state: state, prescription: candidate.prescription });
+      const row = (saved.rows as Array<Record<string, unknown>>)[0];
+      const sync = await drainCalendarOutbox(admin, userId);
+      return json({ workout: reviewed.corrected, workout_id: row.id, provider: "deterministic", model: SESSION_POLICY.version,
+        estimated_cost_usd: 0, fallback_attempts: [], intervals_event_id: sync.events[String(row.id)] ?? null,
+        push_error: sync.error, review_violations: reviewed.violations, review_issues: reviewed.issues });
+    }
+
+    // Establish the executable choices before spending tokens on a proposal.
+    // Warm-ups have the same equipment/catalog restrictions as working sets.
+    const proposalState = constrainSession(await sessionState(admin, userId, onboarding, date, type as TrainingSport, body.duration, slot), reviewCtx);
+    if (observedWeather?.localDate === date && (type === "run" || type === "ride")) proposalState.conditions = { date, ...assessViability(observedWeather, type) };
+    proposalState.weekly_remaining_minutes = await remainingWeekMinutes(admin, userId, onboarding, date, new Set([slotKey(date, slot)]), proposalState.actual);
+    const maximumMinutes = Math.min(proposalState.max_minutes, proposalState.weekly_remaining_minutes, proposalState.program?.session_minutes ?? proposalState.max_minutes);
+    userPrompt += `\n\nCOMPILER CONSTRAINTS: ${JSON.stringify(sessionProposalLimits(proposalState))}. Choose ONLY an allowed objective and state it clearly in the title. Use the recent completed sessions and saved lift references to preserve demonstrated ability. A Beginner label alone does not justify replacing established continuous running with run-walk. Use Z1 for warm-up/cool-down and Z2 for an easy main set; do not add strides, tempo or threshold work if those objectives are unavailable. Warm-up, main work, recovery and cool-down must ALL fit the time limit.`;
+    userPrompt += `\n\nEXECUTABLE LIMIT: the COMPLETE session including warm-up, work, rest and transitions must fit within ${maximumMinutes} minutes.`;
+    if (type === "strength") userPrompt += `\nFor ALL strength sections, INCLUDING warm-ups, choose ONLY from this eligible exercise list: ${eligibleSessionExercises(proposalState).map(e => e.name).join("; ")}. Do not add cardio machines or exercises outside this list.`;
+
     // 7. resolve fallback chain + keys, then generate ----------------------
     const { chain, resolveKey, resolveModel, resolveBaseUrl, hosted } = await llmAccess(admin, userId, profile);
     if (chain.length === 0) {
       return json({ error: "No AI provider configured. Add an API key in Settings." }, 400);
     }
 
-    let outcome;
+    let outcome: Awaited<ReturnType<typeof llmGenerateWithFallback>>;
     try {
       outcome = await llmGenerateWithFallback(
         chain,
@@ -627,37 +726,21 @@ Return the revised workout as JSON only, same schema.`;
       return json({ error: "could not parse workout", detail: parseError, raw: outcome.text }, 422);
     }
 
-    // 8c. snap reworded strength names onto the loggable catalog (e.g. "Machine
-    // Lat Pulldown" → "Lat Pulldown") BEFORE saving, so the client gets catalog-
-    // exact names and only truly-new exercises become customs.
-    const customs = validated.type === "strength" ? await customExercises(admin, userId) : [];
-    if (validated.type === "strength") canonicalizeStrengthExercises(validated, customs);
-
     // 8d. CONTENT review — enforce the prescription (progressive-overload floor,
     // load safety ceiling, weekly volume landmark, 48h recovery, endurance
     // readiness) and recompute an independent TSS so a bad self-report can't
     // poison next-day ACWR. Auto-fixable issues are corrected in place; any
     // remaining judgement-call violations trigger ONE targeted repair pass.
-    const reviewCtx = {
-      mainLifts,
-      weeklySetsByMuscle,
-      muscleGroupsLast48h,
-      tsb: fitness.tsb,
-      daysSinceLastHard,
-      experience: experienceForSport(onboarding, type),
-      // Structured safety: injuries on file (coach_knowledge is separate free
-      // text, covered by the prompt-level instruction, not this backstop).
-      injuries: injuriesOf(onboarding),
-      // Dated pain backoffs, enforced structurally (strip / intensity cap) the
-      // same way the contraindication engine is.
-      backoffs,
-      // Deterministic intensity ceiling + equipment hard-filter. The basis
-      // rides along: an unmeasured 50 must not cap anything.
-      readiness: recovery.score,
-      readinessBasis: recovery.basis,
-      equipment: onboarding.equipment as string | undefined,
-    };
-    let review = reviewWorkout(validated, reviewCtx);
+    validated = await compileWithRepairs(validated,proposalState,async(previous,error)=> {
+      await logLlmResult(admin,userId,"workout",hosted,outcome,profile,{systemPrompt:SYSTEM_PROMPT,userPrompt,rawResponse:outcome.text,parsedOk:false,error});
+      const limit=Math.min(proposalState.max_minutes,proposalState.program?.session_minutes ?? proposalState.max_minutes);
+      const repairPrompt=`${userPrompt}\nPREVIOUS WORKOUT TO REPAIR: ${JSON.stringify(previous)}\nCOMPILER ERROR: ${error}. Repair this exact workout. Count ALL sets, work, rest and transitions. Aim below ${Math.floor(limit*0.85)} minutes to leave a time buffer. Preserve the primary lifts and their ability-appropriate loads; trim accessory sets or excess warm-up/rest if necessary. Use only allowed objectives. Supply explicit per-repetition dose.work_seconds for endurance. Return corrected workout JSON only.`;
+      const retry=await llmGenerateWithFallback(chain,{prompt:repairPrompt,systemPrompt:SYSTEM_PROMPT,temperature:0.2,hosted,feature:"workout",jsonSchema:{name:"emit_workout",schema:WORKOUT_TOOL_SCHEMA}},resolveKey,resolveModel,resolveBaseUrl);
+      const repair=validateWorkout(extractJson(retry.text));
+      if(!repair.ok||!repair.workout){await logLlmResult(admin,userId,"workout",hosted,retry,profile,{parsedOk:false,error:repair.error??"Invalid repair"});throw new PlanError(repair.error??"Invalid dose repair",422,"DOSE_INVALID");}
+      outcome=retry;return repair.workout;
+    });
+    let review = reviewGeneratedWorkout(validated, reviewCtx);
     validated = review.corrected;
     if (review.violations.length) {
       try {
@@ -680,9 +763,8 @@ Return the revised workout as JSON only, same schema.`;
         );
         const v2 = validateWorkout(extractJson(retry.text));
         if (v2.ok && v2.workout) {
-          const w2 = v2.workout;
-          if (w2.type === "strength") canonicalizeStrengthExercises(w2, customs);
-          const r2 = reviewWorkout(w2, reviewCtx);
+          const w2 = compileProposal(v2.workout, constrainSession(proposalState, reviewCtx));
+          const r2 = reviewGeneratedWorkout(w2, reviewCtx);
           // Keep the repair only if it genuinely reduced the violation count.
           if (r2.violations.length < review.violations.length) {
             validated = r2.corrected;
@@ -695,66 +777,17 @@ Return the revised workout as JSON only, same schema.`;
       }
     }
 
-    // 8e. SAFETY NET — never serve an unsafe or hollowed-out session. If the
-    // contraindication strip (or corrections) left a non-rest workout with no
-    // real content, fall back to a recovery/mobility day rather than risk it.
-    if (validated.type !== "rest" && validated.sections.every((s) => s.exercises.length === 0)) {
-      validated = {
-        type: "rest",
-        title: "Recovery / mobility",
-        duration_minutes: 30,
-        tss_estimate: 10,
-        rpe_target: 2,
-        sections: [],
-        coach_note:
-          "Held back today: the generated session conflicted with an injury/constraint on file. " +
-          "Do easy mobility and recovery instead, and re-generate once it's cleared.",
-      } as typeof validated;
-      review.violations.push("fell back to a safe recovery day (unsafe/empty after review)");
-    }
+    assertPublishable(validated, reviewCtx);
 
     // Recompute cost in case the repair pass replaced `outcome`.
     const finalCost = estimateCostUsd(outcome.provider, outcome.promptTokens, outcome.completionTokens, customPriceFromProfile(outcome.provider, profile), outcome.model);
 
-    // 9. persist planned workout + log -------------------------------------
-    // Idempotent: replace any incomplete plan already on this date so repeated
-    // generations don't pile up duplicates (and clean up their watch events).
-    const { data: stale } = await admin
-      .from("planned_workouts")
-      .select("id, intervals_event_id")
-      .eq("user_id", userId).eq("date", date).eq("completed", false);
-    if (stale?.length) {
-      const key = intervalsApiKey ??
-        (profile.intervals_api_key_encrypted ? await decryptSecret(admin, profile.intervals_api_key_encrypted) : null);
-      if (key && profile.intervals_athlete_id) {
-        for (const r of stale) {
-          if (r.intervals_event_id) {
-            try { await deleteEvent(profile.intervals_athlete_id, key, r.intervals_event_id); } catch (_e) { /* ignore */ }
-          }
-        }
-      }
-      await admin.from("planned_workouts").delete().eq("user_id", userId).eq("date", date).eq("completed", false);
-    }
-
-    const { data: planned, error: insErr } = await admin
-      .from("planned_workouts")
-      .insert({
-        user_id: userId,
-        date,
-        type: validated.type,
-        workout_json: validated,
-        llm_provider: outcome.provider,
-        llm_model: outcome.model,
-        // Lock athlete-requested fixed sessions so the weekly re-planner leaves them be.
-        locked: body.lock === true,
-      })
-      .select()
-      .single();
-    if (insErr) return json({ error: `save failed: ${insErr.message}` }, 500);
-
-    // Any exercise the model introduced outside the catalog becomes a custom
-    // entry (with the AI's metadata) so the loggers recognise it by name.
-    await registerUnknownExercises(admin, userId, validated);
+    const saved = await replacePlan(admin, userId, generationId, scope, revision, date, date, [{
+      date, session_slot: slot, start_minute: sessionWindows(onboarding, date).find(w => w.slot === slot)?.start_minute, type: validated.type, workout_json: validated, llm_provider: outcome.provider,
+      llm_model: outcome.model, locked: body.lock === true, sync_requested: shouldPush,
+    }], null, { program_state: proposalState.program_state, athlete_state: proposalState, review_violations: review.violations, review_issues: review.issues,
+      provider:outcome.provider, model:outcome.model, estimated_cost_usd:finalCost });
+    const planned = ((saved.rows as Array<Record<string,unknown>>)[0]);
 
     // Same inputs as finalCost above, so the logged cost matches what we return.
     await logLlmResult(admin, userId, "workout", hosted, outcome, profile, {
@@ -763,34 +796,12 @@ Return the revised workout as JSON only, same schema.`;
       rawResponse: outcome.text,
       // Record any content-review findings (post-correction) for auditing.
       error: review.violations.length ? JSON.stringify(review.violations) : null,
-      workoutId: planned.id,
+      workoutId: String(planned.id),
     });
 
-    // 10. push to Intervals.icu calendar -----------------------------------
-    let intervalsEventId: string | null = null;
-    let pushError: string | null = null;
-    if (shouldPush && validated.type !== "rest" &&
-        profile.intervals_athlete_id && profile.intervals_api_key_encrypted) {
-      try {
-        const apiKey = intervalsApiKey ?? await decryptSecret(admin, profile.intervals_api_key_encrypted);
-        if (apiKey) {
-          const description = renderIntervalsWorkout(validated);
-          const ev = await createEvent(profile.intervals_athlete_id, apiKey, {
-            date,
-            name: validated.title,
-            description,
-            type: validated.type === "run" ? "Run" : validated.type === "ride" ? "Ride" : validated.type === "swim" ? "Swim" : "Workout",
-          });
-          intervalsEventId = ev.id;
-          await admin
-            .from("planned_workouts")
-            .update({ intervals_event_id: ev.id, pushed_at: new Date().toISOString() })
-            .eq("id", planned.id);
-        }
-      } catch (e) {
-        pushError = e instanceof Error ? e.message : String(e);
-      }
-    }
+    const sync = await drainCalendarOutbox(admin, userId);
+    const intervalsEventId = sync.events[String(planned.id)] ?? null;
+    const pushError = sync.error;
 
     log.info("done", {
       ms: Date.now() - startedAt,
@@ -812,10 +823,12 @@ Return the revised workout as JSON only, same schema.`;
       intervals_event_id: intervalsEventId,
       push_error: pushError,
       review_violations: review.violations,
+      review_issues: review.issues,
       tss_replaced: review.tssReplaced ?? null,
     });
   } catch (e) {
     log.error("failed", { ms: Date.now() - startedAt, err: e instanceof Error ? e.message : String(e) });
-    return json({ error: e instanceof Error ? e.message : String(e) }, errorStatus(e));
+    return json({ error: e instanceof Error ? e.message : String(e),
+      ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) }, errorStatus(e));
   }
 });

@@ -41,9 +41,10 @@ internal const val STARTER_PLAN_WEEK =
         "confirm each day. When it's scheduled, summarize the week and why it's built that way."
 
 internal const val STARTER_EXPLAIN_TODAY =
-    "Look at today's planned workout and explain exactly why it's the right session for me " +
-        "today, how it fits my current fitness, fatigue and goal. If it doesn't match how " +
-        "I'm likely feeling, propose a specific adjustment and offer to apply it."
+    "What should I do today? Read all of today's saved sessions and explain what to do, " +
+        "including the warm-up, main work and effort. Use the existing plan, including rest " +
+        "or completed sessions. Do not create or replace a workout. If a change seems useful, " +
+        "explain why and offer it without editing the calendar."
 
 internal const val STARTER_MAKE_TODAY =
     "Make me today's workout. Check my readiness, recent training and goal, pick the right " +
@@ -57,6 +58,7 @@ internal const val STARTER_RECENT =
 internal fun friendlyToolProgress(tool: String): String = when (tool) {
     "get_fitness" -> "Checking your fitness…"
     "get_recent_activities" -> "Reviewing recent activities…"
+    "get_today_plan" -> "Reading today’s workout…"
     "get_planned_week" -> "Looking at your week…"
     "get_strength_summary" -> "Reviewing your lifting…"
     "get_profile" -> "Checking your profile…"
@@ -147,6 +149,7 @@ internal fun friendlyTools(tools: List<String>): String {
         when (t) {
             "get_fitness" -> "checked your fitness"
             "get_recent_activities" -> "reviewed recent activities"
+            "get_today_plan" -> "read today’s workout"
             "get_planned_week" -> "looked at your week"
             "get_strength_summary" -> "reviewed your lifting"
             "get_profile" -> "checked your profile"

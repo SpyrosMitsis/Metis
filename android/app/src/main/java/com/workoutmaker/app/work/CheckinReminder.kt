@@ -1,5 +1,7 @@
 package com.workoutmaker.app.work
 
+import com.workoutmaker.app.util.runCatching
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent

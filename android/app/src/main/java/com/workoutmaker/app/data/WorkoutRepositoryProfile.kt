@@ -1,5 +1,7 @@
 package com.workoutmaker.app.data
 
+import com.workoutmaker.app.util.runCatching
+
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.rpc
@@ -29,7 +31,7 @@ suspend fun WorkoutRepository.isOnboardingComplete(): Boolean = runCatching {
     onFailure = { runCatching { prefs.onboardingCompleteCached() }.getOrDefault(false) },
 )
 
-suspend fun WorkoutRepository.saveProfile(profile: TrainingProfile) {
+suspend fun WorkoutRepository.saveProfile(profile: TrainingProfile) = withAccount {
     val onboarding = json.encodeToJsonElement(TrainingProfile.serializer(), profile)
     supabase.postgrest.from("user_profiles").update(
         mapOf(
@@ -58,7 +60,7 @@ suspend fun WorkoutRepository.loadKnowledge(): String =
         (profileRow()?.get("coach_knowledge") as? JsonPrimitive)?.content ?: ""
     }.logFailure("loadKnowledge").getOrDefault("")
 
-suspend fun WorkoutRepository.saveKnowledge(text: String) {
+suspend fun WorkoutRepository.saveKnowledge(text: String) = withAccount {
     supabase.postgrest.from("user_profiles").update(
         mapOf("coach_knowledge" to JsonPrimitive(text)),
     ) { filter { eq("id", uid()) } }
@@ -71,7 +73,7 @@ suspend fun WorkoutRepository.loadMemory(): String =
         (profileRow()?.get("training_memory") as? JsonPrimitive)?.content ?: ""
     }.logFailure("loadMemory").getOrDefault("")
 
-suspend fun WorkoutRepository.saveMemory(text: String) {
+suspend fun WorkoutRepository.saveMemory(text: String) = withAccount {
     supabase.postgrest.from("user_profiles").update(
         mapOf("training_memory" to JsonPrimitive(text)),
     ) { filter { eq("id", uid()) } }
@@ -86,26 +88,26 @@ suspend fun WorkoutRepository.loadSoul(): String =
         (profileRow()?.get("coach_soul") as? JsonPrimitive)?.content ?: ""
     }.logFailure("loadSoul").getOrDefault("")
 
-suspend fun WorkoutRepository.saveSoul(text: String) {
+suspend fun WorkoutRepository.saveSoul(text: String) = withAccount {
     supabase.postgrest.from("user_profiles").update(
         mapOf("coach_soul" to JsonPrimitive(text)),
     ) { filter { eq("id", uid()) } }
     invalidateProfileCache()
 }
 
-suspend fun WorkoutRepository.connectIntervalsVerified(athleteId: String, apiKey: String): ConnectIntervalsResult {
+suspend fun WorkoutRepository.connectIntervalsVerified(athleteId: String, apiKey: String): ConnectIntervalsResult = withAccount {
     val r: ConnectIntervalsResult = json.decodeFromString(connectIntervals(athleteId, apiKey))
     invalidateProfileCache() // athlete id + key hint changed on the profile
-    return r
+    return@withAccount r
 }
 
 // Saved Intervals.icu connection: athlete id + masked key hint (null when
 // not connected). The hint column arrives with migration 27.
-suspend fun WorkoutRepository.intervalsConnection(): Pair<String, String?>? {
-    val row = profileRow() ?: return null
-    val athlete = (row["intervals_athlete_id"] as? JsonPrimitive)?.contentOrNull ?: return null
+suspend fun WorkoutRepository.intervalsConnection(): Pair<String, String?>? = withAccount {
+    val row = profileRow() ?: return@withAccount null
+    val athlete = (row["intervals_athlete_id"] as? JsonPrimitive)?.contentOrNull ?: return@withAccount null
     val hint = (row["intervals_api_key_hint"] as? JsonPrimitive)?.contentOrNull
-    return athlete to hint
+    return@withAccount athlete to hint
 }
 
 // Saved LLM keys (provider, validity, masked hint) for the settings UI.
@@ -131,7 +133,7 @@ suspend fun WorkoutRepository.llmKeyRows(): List<LlmKeyRow> = runCatching {
 suspend fun WorkoutRepository.races(): List<Race> =
     supabase.postgrest.from("races").select { order("date", Order.ASCENDING) }.decodeList()
 
-suspend fun WorkoutRepository.addRace(race: Race) {
+suspend fun WorkoutRepository.addRace(race: Race) = withAccount {
     val row = buildJsonObject {
         put("name", JsonPrimitive(race.name))
         put("date", JsonPrimitive(race.date))
@@ -144,7 +146,7 @@ suspend fun WorkoutRepository.addRace(race: Race) {
     supabase.postgrest.from("races").insert(row)
 }
 
-suspend fun WorkoutRepository.deleteRace(race: Race) {
+suspend fun WorkoutRepository.deleteRace(race: Race) = withAccount {
     race.id?.let { id ->
         supabase.postgrest.from("races").delete { filter { eq("id", id) } }
     }
@@ -152,8 +154,8 @@ suspend fun WorkoutRepository.deleteRace(race: Race) {
     // periodization, phase and taper read. Matched on the DATE alone: that is
     // how the whole app identifies the goal race, and `goal` holds the
     // athlete's training goals, not this race's name.
-    val p = loadProfile() ?: return
-    if (p.goal_date != race.date) return
+    val p = loadProfile() ?: return@withAccount
+    if (p.goal_date != race.date) return@withAccount
     // Promote the soonest remaining A goal rather than leaving no anchor at all,
     // the same way the coach's remove_goal_race does.
     val today = java.time.LocalDate.now().toString()
@@ -173,7 +175,7 @@ suspend fun WorkoutRepository.deleteRace(race: Race) {
 // from every coach prompt, and from the per-sport goal editors in Settings,
 // which read `goal` back by splitting it on " + ". OnboardingViewModel's
 // addGoalRace has always done it this way.
-suspend fun WorkoutRepository.setGoalRace(race: Race) {
+suspend fun WorkoutRepository.setGoalRace(race: Race) = withAccount {
     val p = loadProfile() ?: TrainingProfile()
     val pace = race.target?.takeIf { race.sport == "run" && it.isNotBlank() }
     saveProfile(p.copy(goal_date = race.date, target_pace = pace ?: p.target_pace))
@@ -183,7 +185,7 @@ suspend fun WorkoutRepository.setGoalRace(race: Race) {
 suspend fun WorkoutRepository.thresholdTests(): List<ThresholdTest> =
     supabase.postgrest.from("threshold_tests").select { order("date", Order.DESCENDING) }.decodeList()
 
-suspend fun WorkoutRepository.addThresholdTest(t: ThresholdTest) {
+suspend fun WorkoutRepository.addThresholdTest(t: ThresholdTest) = withAccount {
     val row = buildJsonObject {
         put("date", JsonPrimitive(t.date))
         put("kind", JsonPrimitive(t.kind))
@@ -195,7 +197,7 @@ suspend fun WorkoutRepository.addThresholdTest(t: ThresholdTest) {
 }
 
 // Update the athlete's current threshold (feeds zone calculation).
-suspend fun WorkoutRepository.applyThreshold(kind: String, value: Double) {
+suspend fun WorkoutRepository.applyThreshold(kind: String, value: Double) = withAccount {
     val p = loadProfile() ?: TrainingProfile()
     val updated = when (kind) {
         "lthr" -> p.copy(lthr = value.toInt())

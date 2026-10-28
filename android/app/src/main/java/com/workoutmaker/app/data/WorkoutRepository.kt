@@ -1,7 +1,11 @@
 package com.workoutmaker.app.data
 
+import com.workoutmaker.app.util.runCatching
+
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.gotrue.auth
+import io.github.jan.supabase.gotrue.parseSessionFromFragment
+import io.github.jan.supabase.gotrue.FlowType
 import io.github.jan.supabase.gotrue.providers.builtin.Email
 import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
@@ -23,6 +27,9 @@ import com.workoutmaker.app.util.serverErrorText
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.time.LocalDate
+import androidx.room.withTransaction
+import kotlinx.coroutines.CancellationException
+import androidx.work.WorkManager
 
 @Singleton
 class WorkoutRepository @Inject constructor(
@@ -34,6 +41,8 @@ class WorkoutRepository @Inject constructor(
     internal val deviceCalendar: DeviceCalendarManager,
     // The DAO, not StrengthRepository (which depends on this class).
     internal val strengthDao: StrengthDao,
+    private val db: AppDatabase,
+    private val accounts: AccountCoordinator,
     @ApplicationContext private val appContext: android.content.Context,
 ) {
     internal val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -56,18 +65,20 @@ class WorkoutRepository @Inject constructor(
     internal fun <T> Result<T>.logFailure(op: String): Result<T> =
         onFailure { AppLog.w("repo", "$op failed", it) }
 
-    suspend fun signIn(email: String, password: String) {
+    suspend fun signIn(email: String, password: String) = accounts.exclusive {
         supabase.auth.signInWith(Email) { this.email = email; this.password = password }
         invalidateProfileCache()
     }
 
-    suspend fun signUp(email: String, password: String) =
+    suspend fun signUp(email: String, password: String) = accounts.exclusive {
         // The confirmation email deep-links back into the app (and signs the
         // user straight in, so onboarding starts immediately).
         supabase.auth.signUpWith(Email, redirectUrl = "workoutmaker://auth/confirmed") {
             this.email = email
             this.password = password
         }
+
+    }
 
     // Sends the Supabase recovery email; the link deep-links back into the
     // app, which then shows the set-new-password dialog.
@@ -80,54 +91,65 @@ class WorkoutRepository @Inject constructor(
         supabase.auth.updateUser { password = newPassword }
     }
 
-    suspend fun signOut() {
-        supabase.auth.signOut()
-        // Don't leak one account's local data into the next sign-in.
+    suspend fun signOut() = accounts.exclusive {
+        WorkManager.getInstance(appContext).cancelAllWorkByTag("account-sync")
+        // Cleanup is required, not best effort. Keep the old auth session if
+        // cleanup fails, so another account cannot adopt its unsynced data.
         clearLocalAccountData()
+        supabase.auth.signOut()
     }
 
-    // --- Account scoping -------------------------------------------------
-    // Local state (Room strength tables, offline caches, onboarding flag, the
-    // in-memory exercise registry) belongs to exactly one account. Called on
-    // every entry into the authenticated app; wipes when the signed-in user
-    // differs from the data's owner, so a new account on the same device never
-    // sees the previous account's rows and the sync workers never push them
-    // into the wrong cloud.
-    suspend fun ensureAccountScope() {
-        val uid = supabase.auth.currentUserOrNull()?.id ?: return
-        val owner = runCatching { prefs.lastAccountUid() }.getOrNull()
+    suspend fun <T> withAccount(expectedOwner: String? = auth.currentUserOrNull()?.id, block: suspend () -> T): T = accounts.run(
+        prepare = {
+            auth.awaitInitialization()
+            val owner = auth.currentUserOrNull()?.id ?: throw IllegalStateException("No active account")
+            if (expectedOwner != null && expectedOwner != owner) throw CancellationException("Account changed")
+            ensureAccountScopeLocked(owner)
+        },
+    ) {
+        val owner = auth.currentUserOrNull()?.id ?: throw IllegalStateException("No active account")
+        if (expectedOwner != null && expectedOwner != owner) throw CancellationException("Account changed")
+        val result = block()
+        if (auth.currentUserOrNull()?.id != owner) throw CancellationException("Account changed")
+        result
+    }
+
+    suspend fun ensureAccountScope() = accounts.exclusive {
+        auth.currentUserOrNull()?.id?.let { ensureAccountScopeLocked(it) }
+    }
+
+    private suspend fun ensureAccountScopeLocked(uid: String) {
+        val owner = prefs.lastAccountUid()
         if (owner == uid) return
-        if (owner == null) {
-            // Pre-guard install: adopt the current user instead of wiping, so
-            // updating the app doesn't discard unsynced local data.
-            runCatching { prefs.setLastAccountUid(uid) }
-            return
-        }
-        AppLog.i("repo", "account changed, wiping per-account local state")
-        clearLocalAccountData()
-        runCatching { prefs.setLastAccountUid(uid) }
+        if (owner != null) clearLocalAccountData()
+        prefs.setLastAccountUid(uid)
     }
 
     private suspend fun clearLocalAccountData() {
         invalidateProfileCache()
-        runCatching { prefs.setOnboardingComplete(false) }
-        runCatching { cache.clearWorkouts(); cache.clearSummaries(); cache.clearBriefs(); cache.clearWeekReviews() }
-        runCatching {
+        prefs.setOnboardingComplete(false)
+        db.withTransaction {
+            cache.clearWorkouts(); cache.clearSummaries(); cache.clearBriefs(); cache.clearWeekReviews()
             strengthDao.clearSets(); strengthDao.clearWorkouts()
             strengthDao.clearRoutineItems(); strengthDao.clearRoutines()
-            strengthDao.clearCustomExercises(); strengthDao.clearFavorites()
-            strengthDao.clearTombstones()
-            ExerciseCatalog.resetCustom()
-        }.logFailure("clearLocalAccountData/strength")
-        // A half-finished logger session from the previous account must not
-        // resume under the new one.
-        runCatching { File(appContext.filesDir, "active_session.json").delete() }
+            strengthDao.clearCustomExercises(); strengthDao.clearFavorites(); strengthDao.clearTombstones()
+        }
+        ExerciseCatalog.resetCustom()
+        java.nio.file.Files.deleteIfExists(File(appContext.filesDir, "active_session.json").toPath())
+        deviceCalendar.clearAll()
     }
 
-    // A deep link (email confirm / recovery) imported a session without going
-    // through signIn(), so the profile-row cache may belong to someone else.
-    fun onSessionImported() {
+    suspend fun importAuthLink(uri: android.net.Uri): Boolean = accounts.exclusive {
+        val session = if (auth.config.flowType == FlowType.PKCE) {
+            auth.exchangeCodeForSession(requireNotNull(uri.getQueryParameter("code")), saveSession = false)
+        } else {
+            val parsed = auth.parseSessionFromFragment(requireNotNull(uri.fragment))
+            parsed.copy(user = auth.retrieveUser(parsed.accessToken))
+        }
+        auth.importSession(session)
         invalidateProfileCache()
+        ensureAccountScopeLocked(requireNotNull(session.user?.id))
+        session.type == "recovery" || uri.path?.contains("reset") == true
     }
 
     // Upload crash files captured by CrashReporter. Best effort: a file stays
@@ -168,9 +190,10 @@ class WorkoutRepository @Inject constructor(
     // Permanent server-side account deletion (Play requirement). The edge
     // function cascades through every owned row; afterwards the local session
     // is dead anyway, so clear it like a sign-out.
-    suspend fun deleteAccount() {
+    suspend fun deleteAccount() = accounts.exclusive {
         supabase.functions.invoke("delete-account")
-        runCatching { signOut() }
+        clearLocalAccountData()
+        supabase.auth.signOut()
     }
 
     // --- Profile row cache ----------------------------------------------------
@@ -181,6 +204,7 @@ class WorkoutRepository @Inject constructor(
     private var profileRowCache: Map<String, JsonElement>? = null
     @Volatile
     private var profileRowFetchedAt: Long = 0L
+    @Volatile private var profileRowOwner: String? = null
 
     // TTL because the row also changes server-side (coach memory/soul evolution,
     // web-app profile edits) — without it those stay invisible until app restart.
@@ -188,11 +212,14 @@ class WorkoutRepository @Inject constructor(
 
     internal suspend fun profileRow(): Map<String, JsonElement>? {
         profileRowCache
-            ?.takeIf { System.currentTimeMillis() - profileRowFetchedAt < profileTtlMs }
+            ?.takeIf { profileRowOwner == uid() && System.currentTimeMillis() - profileRowFetchedAt < profileTtlMs }
             ?.let { return it }
+        val owner = uid()
         val rows: List<Map<String, JsonElement>> =
-            supabase.postgrest.from("user_profiles").select { filter { eq("id", uid()) } }.decodeList()
+            supabase.postgrest.from("user_profiles").select { filter { eq("id", owner) } }.decodeList()
+        if (uid() != owner) throw CancellationException("Account changed")
         return rows.firstOrNull()?.also {
+            profileRowOwner = owner
             profileRowCache = it
             profileRowFetchedAt = System.currentTimeMillis()
         }
@@ -201,12 +228,6 @@ class WorkoutRepository @Inject constructor(
     internal fun invalidateProfileCache() {
         profileRowCache = null
     }
-
-
-
-
-
-
 
     // ---- Device calendar (opt-in, Settings → App) ---------------------------
 
@@ -218,90 +239,6 @@ class WorkoutRepository @Inject constructor(
         val from = runCatching { LocalDate.parse(fromDate) }.getOrNull() ?: LocalDate.now()
         return runCatching { deviceCalendar.busyDays(from, days) }.getOrNull()?.takeIf { it.isNotEmpty() }
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     // Edge-function failures throw with the JSON error body in the message —
     // pull out the human-readable part ({"error": "..."} / {"detail": "..."}).

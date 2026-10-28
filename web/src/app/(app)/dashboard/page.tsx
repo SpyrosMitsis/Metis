@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { WorkoutChoice } from "@/components/workout-choice";
+import { workoutChoiceRequest, type WorkoutSportChoice } from "@shared/workout_choices";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, localDateIso } from "@/lib/api";
 import { createClient } from "@/lib/supabase-browser";
@@ -43,6 +45,8 @@ export default function DashboardPage() {
   const stats = useQuery({ queryKey: ["intervals-stats"], queryFn: api.intervalsStats });
   const [showDetails, setShowDetails] = useState(false);
   const [instruction, setInstruction] = useState("");
+  const [workoutSport, setWorkoutSport] = useState<WorkoutSportChoice>("auto");
+  const [workoutFocus, setWorkoutFocus] = useState("");
   const [didIt, setDidIt] = useState(false);
   const [rpe, setRpe] = useState<number | null>(null);
   const [feedbackStatus, setFeedbackStatus] = useState<string | null>(null);
@@ -54,7 +58,7 @@ export default function DashboardPage() {
     queryFn: async () => {
       const since = new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10);
       const { data } = await supabase
-        .from("completed_activities").select("*")
+        .from("effective_activities").select("*")
         .gte("date", since).order("date", { ascending: false }).limit(8);
       return (data ?? []) as CompletedActivity[];
     },
@@ -72,8 +76,8 @@ export default function DashboardPage() {
   const generate = useMutation({
     mutationFn: (vars: { base?: DailySummary["today_workout"]; tweak: string }) =>
       vars.base && vars.tweak.trim()
-        ? api.generateWorkout({ adjustment: vars.tweak.trim(), base_workout: vars.base.workout_json, push: true })
-        : api.generateWorkout({ type: "auto" }),
+        ? api.generateWorkout({ type: workoutSport, adjustment: vars.tweak.trim(), base_workout: vars.base.workout_json, push: true })
+        : api.generateWorkout({ type: workoutSport, request: vars.tweak.trim() || undefined }),
     onSuccess: () => { setInstruction(""); reload(); },
   });
 
@@ -127,10 +131,10 @@ export default function DashboardPage() {
     const ratio = last.atl / last.ctl;
     const weekAgo = pts[Math.max(0, pts.length - 8)];
     const ramp = live?.ramp ?? (last.ctl - (weekAgo?.ctl ?? last.ctl));
-    if (ratio >= 1.5) return { color: "#f87171", headline: "High overload risk", detail: `Fatigue is well above your fitness (ratio ${ratio.toFixed(2)}). Take easy days, an injury/illness spike zone.` };
-    if (ratio >= 1.3 || ramp >= 8) return { color: "#fbbf24", headline: "Ramping fast", detail: `Building quickly (ratio ${ratio.toFixed(2)}, ramp ${ramp >= 0 ? "+" : ""}${ramp.toFixed(1)}). Fine short-term; don't hold it for many weeks.` };
-    if (ratio < 0.8 && ramp < 0) return { color: "#fbbf24", headline: "Detraining / very fresh", detail: `Load is low relative to fitness (ratio ${ratio.toFixed(2)}). Good for a taper; otherwise add volume.` };
-    return { color: "#4ade80", headline: "Load well managed", detail: `Fatigue:fitness ratio ${ratio.toFixed(2)} sits in the productive 0.8-1.3 range.` };
+    if (ratio >= 1.5) return { color: "hsl(var(--sand))", headline: "Recent recorded load is higher", detail: `ATL/CTL ratio ${ratio.toFixed(2)} describes modeled load, not individual injury risk. Review actual training and how you feel.` };
+    if (ratio >= 1.3 || ramp >= 8) return { color: "hsl(var(--sand))", headline: "Recorded load is increasing", detail: `Ratio ${ratio.toFixed(2)}, ramp ${ramp >= 0 ? "+" : ""}${ramp.toFixed(1)}. Interpret this with actual training and your response.` };
+    if (ratio < 0.8 && ramp < 0) return { color: "hsl(var(--sand))", headline: "Recent recorded load is lower", detail: `Ratio ${ratio.toFixed(2)} may reflect rest, changed plans or missing recordings. Do not add work just to raise it.` };
+    return { color: "hsl(var(--primary))", headline: "Recorded load context", detail: `ATL/CTL ratio ${ratio.toFixed(2)} does not establish training quality or recovery.` };
   }, [summary.data, stats.data]);
 
   if (summary.isLoading) return <Skeleton />;
@@ -173,10 +177,10 @@ export default function DashboardPage() {
       <Card>
         <CardContent className="space-y-2 pt-5">
           <div className="flex items-center gap-5">
-            <ReadinessRing score={score} band={band as "green" | "amber" | "red"} />
+            {rec?.basis==="none"||d.readiness_context?.status==="pause"?<div className="text-3xl text-muted-foreground" aria-label="Readiness not measured">—</div>:<ReadinessRing score={score} band={band as "green" | "amber" | "red"} />}
             <div className="space-y-1">
-              <p className="font-semibold">{readinessHeadline(band)}</p>
-              {rec?.summary && <p className="text-sm text-muted-foreground">{rec.summary}</p>}
+              <p className="font-semibold">{d.readiness_context?.status==="pause"?"Affected training on hold":d.readiness_context?.status==="caution"?"Review today’s training load":rec?.basis==="none"?"Readiness not measured":readinessHeadline(band)}</p>
+              {(d.readiness_context?.next_action||rec?.summary)&&<p className="text-sm text-muted-foreground">{d.readiness_context?.next_action??rec?.summary}</p>}{d.readiness_context?.conflicts.map((s,i)=><p key={i} className="text-xs text-muted-foreground">{s}</p>)}
             </div>
           </div>
           <button
@@ -290,10 +294,12 @@ export default function DashboardPage() {
           ) : (
             <p className="text-sm text-muted-foreground">No workout planned. Generate one below.</p>
           )}
+          <WorkoutChoice sport={workoutSport} focus={workoutFocus} onSport={setWorkoutSport} onFocus={setWorkoutFocus} disabled={generate.isPending} />
+          {!d.today_workout && <Input aria-label="Workout notes" placeholder="Workout notes (optional)" value={instruction} onChange={e => setInstruction(e.target.value)} />}
           <Button
             className="w-full"
             disabled={generate.isPending}
-            onClick={() => generate.mutate({ base: d.today_workout, tweak: instruction })}
+            onClick={() => generate.mutate({ base: d.today_workout, tweak: workoutChoiceRequest(workoutSport, workoutFocus, instruction) })}
           >
             <Sparkles className="h-4 w-4" />
             {generate.isPending ? "Generating…" : d.today_workout ? "Regenerate" : "Generate workout"}
@@ -353,7 +359,7 @@ export default function DashboardPage() {
             </div>
           )}
           {loadGuard && (
-            <div className="flex items-start gap-2.5 rounded-xl p-3" style={{ background: `${loadGuard.color}26` }}>
+            <div className="flex items-start gap-2.5 rounded-xl p-3" style={{ background: "hsl(var(--muted))" }}>
               <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: loadGuard.color }} />
               <div>
                 <p className="text-sm font-semibold" style={{ color: loadGuard.color }}>{loadGuard.headline}</p>

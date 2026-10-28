@@ -172,4 +172,17 @@ class StrengthLogicTest {
         // 225 lb ≈ 102.06 kg
         assertEquals(102.06, r.workouts.first().exercises.first().sets.first().weightKg, 0.2)
     }
+    @Test fun csv_preservesExplicitTimedAndCarryUnits() {
+        val csv = "Date;Workout Name;Exercise Name;Weight;Reps;Quantity Unit\n2026-10-22 08:00:00;Mixed;Plank;0;30;seconds\n2026-10-22 08:00:00;Mixed;Farmer Carry;20;25;metres"
+        val sets = StrengthCsvImport.parse(csv).workouts.single().exercises.flatMap { it.sets }
+        assertEquals(listOf("seconds", "metres"), sets.map { it.quantityUnit })
+        assertEquals(listOf(30, 25), sets.map { it.reps })
+    }
+
+    @Test fun timedSetsDoNotCreateRepOrVolumeRecords() {
+        val sets = listOf(LogSet(20.0, 30, quantityUnit = "seconds"), LogSet(20.0, 25, quantityUnit = "metres"))
+        assertEquals(0.0, Prs.record(sets).bestE1rm, 0.0)
+        assertTrue(Prs.detect(PrRecord(), sets).isEmpty())
+    }
+
 }

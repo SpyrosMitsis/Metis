@@ -124,11 +124,12 @@ class HistoryViewModel @Inject constructor(
 
         val pairedIds = HashSet<String>()
         fun watchFor(w: WorkoutEntity): CompletedActivity? {
-            val day = dateOf(w.startedAt)
-            return activities.firstOrNull {
-                it.id !in pairedIds &&
-                    runCatching { LocalDate.parse(it.date) == day }.getOrDefault(false)
-            }?.also { pairedIds.add(it.id) }
+            val candidates = activities.filter { activity ->
+                activity.id !in pairedIds && activity.started_at?.let { value ->
+                    runCatching { kotlin.math.abs(java.time.Instant.parse(value).toEpochMilli() - w.startedAt) <= 30 * 60 * 1000L }.getOrDefault(false)
+                } == true
+            }
+            return candidates.singleOrNull()?.also { pairedIds.add(it.id) }
         }
 
         rows.value = workouts.map { StrengthHistoryRow(it, watchFor(it)) }
@@ -278,11 +279,12 @@ class StrengthAnalysisViewModel @javax.inject.Inject constructor(
     val busy = MutableStateFlow<String?>(null)
     val error = MutableStateFlow<String?>(null)
 
-    fun analyze(date: String, force: Boolean = false) = viewModelScope.launch {
-        busy.value = date
+    fun analyze(date: String, force: Boolean = false, workoutId: String? = null) = viewModelScope.launch {
+        val key = workoutId ?: date
+        busy.value = key
         error.value = null
-        runCatching { repo.analyzeStrength(date, force) }
-            .onSuccess { results.value = results.value + (date to it) }
+        runCatching { repo.analyzeStrength(date, force, workoutId = workoutId) }
+            .onSuccess { results.value = results.value + (key to it) }
             .onFailure {
                 AppLog.w("analyze", "analyze-strength failed date=$date", it)
                 error.value = friendlyFnError(it)
@@ -293,11 +295,12 @@ class StrengthAnalysisViewModel @javax.inject.Inject constructor(
     // Auto-load an analysis that already exists (computed right after the session
     // synced) without ever triggering a fresh LLM run.
     private val peeked = mutableSetOf<String>()
-    fun peek(date: String) = viewModelScope.launch {
-        if (date in peeked || results.value.containsKey(date)) return@launch
-        peeked += date
-        runCatching { repo.analyzeStrength(date, peek = true) }
-            .onSuccess { if (it.ok) results.value = results.value + (date to it) }
+    fun peek(date: String, workoutId: String? = null) = viewModelScope.launch {
+        val key = workoutId ?: date
+        if (key in peeked || results.value.containsKey(key)) return@launch
+        peeked += key
+        runCatching { repo.analyzeStrength(date, peek = true, workoutId = workoutId) }
+            .onSuccess { if (it.ok) results.value = results.value + (key to it) }
     }
 }
 
@@ -305,14 +308,16 @@ class StrengthAnalysisViewModel @javax.inject.Inject constructor(
 internal fun StrengthAnalysisSection(
     date: String,
     vm: StrengthAnalysisViewModel = hiltViewModel(),
+    workoutId: String? = null,
 ) {
     val results by vm.results.collectAsStateSafe()
     val busy by vm.busy.collectAsStateSafe()
     val error by vm.error.collectAsStateSafe()
-    val a = results[date]
+    val key = workoutId ?: date
+    val a = results[key]
 
     // Display a background-computed analysis immediately, no button press needed.
-    LaunchedEffect(date) { vm.peek(date) }
+    LaunchedEffect(key) { vm.peek(date, workoutId) }
 
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -320,7 +325,7 @@ internal fun StrengthAnalysisSection(
             Spacer(Modifier.weight(1f))
             if (a != null) {
                 TextButton(
-                    onClick = { vm.analyze(date, force = true) },
+                    onClick = { vm.analyze(date, force = true, workoutId = workoutId) },
                     enabled = busy == null,
                 ) { Text("Re-analyze") }
             }
@@ -333,7 +338,7 @@ internal fun StrengthAnalysisSection(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             GhostButton(
-                onClick = { vm.analyze(date) },
+                onClick = { vm.analyze(date, workoutId = workoutId) },
                 enabled = busy == null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -341,7 +346,7 @@ internal fun StrengthAnalysisSection(
                     Icons.Filled.AutoAwesome, null,
                     Modifier.size(18.dp),
                 )
-                Text(if (busy == date) "  Analyzing…" else "  Analyze this session")
+                Text(if (busy == key) "  Analyzing…" else "  Analyze this session")
             }
             error?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -362,6 +367,12 @@ internal fun StrengthAnalysisSection(
             }
         } else {
             Text(a.label ?: "No planned session to compare against.", style = MaterialTheme.typography.bodyMedium)
+        }
+        a.coverage_evidence?.let { coverage ->
+            Text("Exact exercises: ${coverage.exact}/${coverage.total} · Movement coverage: ${coverage.movement}/${coverage.total} · Muscle overlap: ${coverage.muscle}/${coverage.total}", style = MaterialTheme.typography.bodySmall)
+        }
+        a.dose_evidence.forEach { dose ->
+            Text("${dose.exercise}: ${dose.logged_sets}/${dose.planned_sets} working sets recorded${dose.sets_in_rep_range?.let { "; $it in the planned rep range" } ?: "; units need confirmation"}", style = MaterialTheme.typography.bodySmall)
         }
         a.components.forEach { c ->
             Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
@@ -513,7 +524,7 @@ fun StrengthSessionDetailScreen(
 
         // Execution analysis: planned prescription vs what was actually lifted,
         // with AI coach feedback — sibling of the run/ride analysis.
-        StrengthAnalysisSection(dateOf(w.startedAt).toString())
+        StrengthAnalysisSection(dateOf(w.startedAt).toString(), workoutId = w.id)
 
         val byExercise = remember(sets) { sets.groupBy { it.exerciseName } }
         byExercise.forEach { (name, exSets) ->

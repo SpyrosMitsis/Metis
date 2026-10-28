@@ -233,7 +233,7 @@ export function scoreRaw(raw: string, fx: Fixture): EvalScore {
     if (!v.ok || !v.workout) {
       return { fixture: fx.name, valid: false, violations: 0, unsafe: 0, tss: 0, parseError: v.error };
     }
-    const review = reviewWorkout(v.workout, fx.ctx);
+    const review = reviewWorkout(v.workout, { ...fx.ctx, catalogOnly: true });
     return {
       fixture: fx.name,
       valid: true,
@@ -257,7 +257,7 @@ export function buildFixtures(): Fixture[] {
   const baseStrengthCtx: ReviewContext = {
     mainLifts: [
       { exercise: "Barbell Bench Press", estimated1rm: 110, lastWeight: 90, lastReps: 5, lastSets: 3 },
-      { exercise: "Barbell Squat", estimated1rm: 150, lastWeight: 120, lastReps: 5, lastSets: 3 },
+      { exercise: "Back Squat", estimated1rm: 150, lastWeight: 120, lastReps: 5, lastSets: 3 },
     ],
     weeklySetsByMuscle: { Chest: 6, Back: 4, Quads: 6 },
     muscleGroupsLast48h: [],

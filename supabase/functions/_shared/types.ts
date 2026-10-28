@@ -1,3 +1,4 @@
+import type { SessionPrescription } from "../../../shared/prescription.ts";
 // Shared types used across Edge Functions. The canonical workout schema is
 // mirrored in /shared/types.ts for the web + Android clients.
 
@@ -48,6 +49,7 @@ export interface InjuryBackoff {
 }
 
 export interface WorkoutExercise {
+  dose?: { work_seconds?: number; distance_m?: number; stroke?: string; recovery_after_last?: boolean; transition_seconds?: number };
   name: string;
   sets: number;
   reps: string;
@@ -70,6 +72,7 @@ export interface WorkoutSection {
 }
 
 export interface Workout {
+  prescription?: SessionPrescription;
   type: "run" | "ride" | "swim" | "strength" | "rest";
   title: string;
   duration_minutes: number;

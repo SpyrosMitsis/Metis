@@ -1,3 +1,16 @@
+import type { TrainingSport } from "../../../shared/prescription.ts";
+import { sessionProposalLimits } from "../_shared/session_engine.ts";
+import { logger } from "../_shared/log.ts";
+import { overlapReason, demandingWorkout } from "../_shared/training_demands.ts";
+import { startingLiftReferences } from "../_shared/strength_evidence.ts";
+import { slotKey } from "../_shared/session_slots.ts";
+import { compileWithRepairs, sessionRepairPrompt } from "../_shared/proposal_compiler.ts";
+import { sessionState, withForecast } from "../_shared/session_context.ts";
+import { SESSION_POLICY } from "../_shared/session_engine.ts";
+import { deterministicWeek } from "../_shared/deterministic_week.ts";
+import { dailyMinutes, explicitImplements } from "../_shared/session_context.ts";
+import { assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
+import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // plan-week — the mature planner: generate a coherent, periodized 7-day
 // microcycle in one shot (80/20 distribution, recovery spacing, weekly volume
 // target, deload when fatigued), persist it idempotently to planned_workouts,
@@ -18,13 +31,12 @@ import { defaultHrZones } from "../_shared/zones.ts";
 import {
   buildWeekPrompt,
   trainingPhase,
-  validateWeekPlan,
+  validateWeekPlan, validateWorkout, SYSTEM_PROMPT, WORKOUT_TOOL_SCHEMA,
   WEEK_SYSTEM_PROMPT,
   WEEK_TOOL_SCHEMA,
 } from "../_shared/prompt.ts";
-import { createEvent, deleteEvent, latestFitness } from "../_shared/intervals.ts";
+import { latestFitness } from "../_shared/intervals.ts";
 import { applyFallbackFitness } from "../_shared/load.ts";
-import { renderIntervalsWorkout } from "../_shared/intervals_workout.ts";
 import {
   adherenceBlock,
   calendarBlock,
@@ -48,8 +60,8 @@ import {
   weeklyAvailableMinutes,
 } from "../_shared/profile.ts";
 import { memoryDocsBlock, memoryFromProfile } from "../_shared/agent_memory.ts";
-import { exerciseCatalogBlock, registerUnknownExercises } from "../_shared/exercise_catalog.ts";
-import { isHardSession, type MainLift, muscleOf, reviewWorkout } from "../_shared/workout_review.ts";
+import { exerciseCatalogBlock } from "../_shared/exercise_catalog.ts";
+import { isHardSession, type MainLift, muscleOf } from "../_shared/workout_review.ts";
 import { coerceForPause, computeDayList, computePeriodization, weekdayOf } from "../_shared/week_planning.ts";
 import {
   activeBackoffs,
@@ -78,13 +90,22 @@ const safeJson = (text: string): unknown => {
   try { return extractJson(text); } catch { return null; }
 };
 
-async function planForUser(admin: SupabaseClient, userId: string, start: string, shouldPush: boolean, calendarBusy: unknown = null) {
+async function planForUser(admin: SupabaseClient, userId: string, start: string, shouldPush: boolean, calendarBusy: unknown = null, generationId: string = crypto.randomUUID(), localToday?: string) {
+  isoDate(start);
   const allDates = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   const end = allDates[6];
   // Never touch days that have already happened: re-planning mid-week only
   // rebuilds today onward. The earlier days stay as the record of what was
   // planned (and the actuals feed the prompt via the adherence block).
-  const today = new Date().toISOString().slice(0, 10);
+  const today = isoDate(localToday ?? new Date().toISOString().slice(0,10));
+  const requestScope = { start, shouldPush, calendarBusy, today };
+  const replay = await savedRequest(admin,userId,generationId,requestScope);
+  if (replay) {
+    const replayRows = replay.rows as Array<Record<string,unknown>>;
+    const sync = await drainCalendarOutbox(admin,userId);
+    return { start_date:start,end_date:end,week_focus:replay.focus,rationale:replay.rationale,provider:replay.provider,model:replay.model,estimated_cost_usd:0,scheduled:replayRows.length,pushed:Object.keys(sync.events).length,days:replayRows.map(r=>({date:r.date,weekday:weekdayOf(String(r.date)),type:r.type,title:(r.workout_json as Workout).title,tss:Math.round((r.workout_json as Workout).tss_estimate)})),review_violations:replay.review_violations??[],review_issues:replay.review_issues??[],replayed:true,sync_error:sync.error };
+  }
+  const revision = await planRevision(admin,userId);
   const dates = allDates.filter((d) => d >= today);
   if (dates.length === 0) throw new Error("that week is already over, nothing left to plan");
   const planFrom = dates[0];
@@ -98,8 +119,8 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   const since14 = new Date(Date.now() - 14 * DAY).toISOString().slice(0, 10);
   const since7 = new Date(Date.now() - 7 * DAY).toISOString().slice(0, 10);
   const { data: activities } = await admin
-    .from("completed_activities")
-    .select("type, date, distance_m, tss, ctl, atl")
+    .from("effective_activities")
+    .select("type, date, distance_m, tss, ctl, atl, planned_workout_id, link_source")
     .eq("user_id", userId).gte("date", since28).order("date", { ascending: false });
   // No intervals-provided CTL in the window? Fill estimated values from
   // stored TSS so fitness/goal context still works without intervals.icu.
@@ -143,9 +164,9 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   // Athlete-locked fixed sessions in this week (social runs, gym with a friend…).
   // The planner must work around them, not over them.
   const { data: lockedRows } = await admin
-    .from("planned_workouts").select("date, type, workout_json")
-    .eq("user_id", userId).gte("date", planFrom).lte("date", end).eq("locked", true);
-  const lockedByDate = new Map((lockedRows ?? []).map((r) => [r.date as string, r]));
+    .from("reconciled_session_plans").select("id, date, session_slot, start_minute, type, workout_json, skipped")
+    .eq("user_id", userId).gte("date", planFrom).lte("date", end).or("locked.eq.true,completed.eq.true,skipped.eq.true");
+  const lockedByDate = new Map((lockedRows ?? []).filter(r => (r.session_slot ?? 0) === 0).map((r) => [r.date as string, r]));
   const lockedBlock = lockedByDate.size === 0 ? "" :
     `\n\nFIXED SESSIONS, the athlete has LOCKED these days; DO NOT schedule anything on them. Plan the rest of the week AROUND them (respect easy/recovery before and after a hard fixed session):\n` +
     [...lockedByDate.entries()].map(([d, r]) =>
@@ -239,13 +260,35 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   const pauseReason = (profile.training_pause_reason as string | null) ?? null;
   const dayList = computeDayList(dates, availableDays, new Set(lockedByDate.keys()), pausedUntil);
 
-  const userPrompt = buildWeekPrompt({
+  if (onboarding.prescription_engine === "deterministic" || (Array.isArray(onboarding.session_windows) && onboarding.session_windows.some((w: { slot?: number }) => w.slot === 1))) {
+    const result = await deterministicWeek(admin, userId, profile, computeDayList(dates, availableDays, new Set(), pausedUntil), new Map((lockedRows ?? []).map(r => [slotKey(r.date, r.session_slot), r])));
+    const rows = result.rows.map(row => ({ ...row, sync_requested: shouldPush }));
+    await replacePlan(admin, userId, generationId, requestScope, revision, start, end, rows, null,
+      { programs: result.programs, athlete_states: result.states, focus: "Consistent training", rationale: result.rationale, model: SESSION_POLICY.version, provider: "deterministic" });
+    const sync = await drainCalendarOutbox(admin, userId);
+    return { start_date: start, end_date: end, week_focus: "Consistent training", rationale: result.rationale,
+      provider: "deterministic", model: SESSION_POLICY.version, estimated_cost_usd: 0, scheduled: rows.length,
+      pushed: Object.keys(sync.events).length, sync_error: sync.error,
+      days: rows.map(r => ({ date: r.date, weekday: weekdayOf(r.date), type: r.type, title: r.workout_json.title, tss: r.workout_json.tss_estimate })),
+      review_violations: [], review_issues: [] };
+  }
+
+  let userPrompt = buildWeekPrompt({
     startDate: start, dayList,
     goal: goalsText(onboarding),
     experience: onboarding.experience ?? "Intermediate",
     phase, tsb: fitness.tsb, ctl: fitness.ctl, atl: fitness.atl, acwr,
     wellness3d, weeklyKm, weeklyTssTarget: phaseTssTarget, hrZones, contextBlocks,
   });
+
+  const compilerLimits = [];
+  for (const date of dates) if (date >= planFrom && !lockedByDate.has(date)) {
+    for (const sport of sportsList.filter(s=>["run","ride","swim","strength"].includes(s))) {
+      const state = await sessionState(admin,userId,onboarding,date,sport as TrainingSport);
+      compilerLimits.push(sessionProposalLimits(state));
+    }
+  }
+  userPrompt += `\n\nPER-DAY COMPILER CONSTRAINTS: ${JSON.stringify(compilerLimits)}. Use the recent completed sessions and saved lift references to preserve demonstrated ability; do not replace established continuous running with run-walk solely because of a Beginner label. Use only the allowed objectives for each sport/date and fit ALL warm-up, work, rest and transitions within the stated complete-session limit. Easy sessions use Z1 warm-up/cool-down and a Z2 main set. Do not add hard work when that objective is unavailable.`;
 
   const { chain, resolveKey, resolveModel, resolveBaseUrl, hosted } = await llmAccess(admin, userId, profile);
   if (chain.length === 0) throw new Error("No AI provider configured");
@@ -303,21 +346,9 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
     throw new Error(`could not parse week plan: ${v.error}`);
   }
   const plan = v.plan;
-
-  // Idempotent replace of the whole week (clean up old watch events) — but
-  // NEVER touch locked, athlete-fixed sessions.
-  const { data: stale } = await admin
-    .from("planned_workouts").select("id, intervals_event_id")
-    .eq("user_id", userId).gte("date", planFrom).lte("date", end).eq("completed", false).eq("locked", false);
-  if (stale?.length && phys.apiKey && profile.intervals_athlete_id) {
-    for (const r of stale) {
-      if (r.intervals_event_id) {
-        try { await deleteEvent(profile.intervals_athlete_id, phys.apiKey, r.intervals_event_id); } catch (_e) { /* ignore */ }
-      }
-    }
-  }
-  await admin.from("planned_workouts").delete()
-    .eq("user_id", userId).gte("date", planFrom).lte("date", end).eq("completed", false).eq("locked", false);
+  const sessionsByDate = new Map(plan.days.map(day => [day.date, day.session]));
+  if (plan.days.some(day => !dates.includes(day.date)) || dates.some(date => !lockedByDate.has(date) && !sessionsByDate.has(date)))
+    throw new PlanError("Generated week has missing or out-of-range dates; existing plan retained", 422, "PLAN_DATES");
 
   // Content review per day — same engine as generate-workout: strip
   // contraindicated movements, clamp unsafe loads, recompute endurance TSS, and
@@ -327,6 +358,7 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   // recovery and back-to-back-hard guards never fired at week scope).
   const injuries = injuriesOf(onboarding);
   const weekViolations: string[] = [];
+  const weekIssues: Array<{ date: string; code: string; message: string }> = [];
 
   // --- strength/recovery seed from history (mirrors generate-workout) --------
   const daysBetweenIso = (a: string, b: string) =>
@@ -372,6 +404,9 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       return { exercise: r.exercise_name, estimated1rm: r.estimated_1rm ?? top.w, lastWeight: top.w, lastReps: top.reps, lastSets: sets.length };
     });
 
+  for (const lift of startingLiftReferences(onboarding)) if (!mainLifts.some(l=>l.exercise===lift.exercise))
+    mainLifts.push({exercise:lift.exercise,estimated1rm:lift.weight_kg*(1+lift.reps/30),lastWeight:lift.weight_kg,lastReps:lift.reps,lastSets:1});
+
   // Days since the last hard effort, seeded from history then advanced as the
   // loop schedules hard days (so back-to-back quality gets caught mid-week).
   let lastHardDate: string | null = acts28.find((a) => (a.tss ?? 0) > 60)?.date ?? null;
@@ -391,12 +426,12 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
     [...new Set(w.sections.flatMap((s) => s.exercises.map((e) => muscleOf(e))))];
 
   // Don't insert on dates that already hold a locked session.
+  const athleteStates: Awaited<ReturnType<typeof sessionState>>[] = [];
   const rows: { user_id: string; date: string; type: string; workout_json: Workout; llm_provider: string; llm_model: string }[] = [];
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     if (lockedByDate.has(date)) continue;
-    let session = plan.days[i]?.session ??
-      { type: "rest", title: "Rest day", duration_minutes: 0, tss_estimate: 0, rpe_target: 0, sections: [], coach_note: "Recovery." } as Workout;
+    let session = sessionsByDate.get(date)!;
 
     // Deterministic guarantee on top of the "available" prompt signal above:
     // even if the model still returned a real session for a paused date,
@@ -411,7 +446,8 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
           .flatMap((m) => m.muscles),
       ),
     ];
-    const rev = reviewWorkout(session, {
+    const reviewContext = {
+      catalogOnly: true, implements: explicitImplements(onboarding), maxMinutes: dailyMinutes(onboarding, date) ?? undefined,
       mainLifts, weeklySetsByMuscle, muscleGroupsLast48h,
       tsb: fitness.tsb, daysSinceLastHard: lastHardDate ? daysBetweenIso(lastHardDate, date) : 99,
       experience: onboarding.experience ?? "Intermediate", injuries, readiness, readinessBasis, equipment,
@@ -419,16 +455,25 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       // Wednesday must stop constraining Thursday. This is the day-level
       // authority the sports list above deliberately does not try to have.
       backoffs: activeBackoffs(profile.injury_backoff, date),
+    };
+    const athleteState = await withForecast(await sessionState(admin, userId, onboarding, date, session.type), profile);
+    athleteStates.push(athleteState);
+    session = await compileWithRepairs(session,athleteState,async(previous,error)=> {
+      const prompt=sessionRepairPrompt(previous,athleteState,error);
+      const repair=await llmGenerateWithFallback(chain,{prompt,systemPrompt:SYSTEM_PROMPT,temperature:0.2,hosted,feature:"plan",jsonSchema:{name:"emit_workout",schema:WORKOUT_TOOL_SCHEMA}},resolveKey,resolveModel,resolveBaseUrl);
+      const checked=validateWorkout(extractJson(repair.text));
+      await logLlmResult(admin,userId,"plan",hosted,repair,profile,{systemPrompt:SYSTEM_PROMPT,userPrompt:prompt,rawResponse:repair.text,parsedOk:checked.ok,error:checked.ok?null:checked.error});
+      if(!checked.ok||!checked.workout)throw new PlanError(checked.error??"Invalid session repair",422,"DOSE_INVALID");
+      return checked.workout;
     });
+    const overlap = overlapReason(date, session.type, demandingWorkout(session), athleteState.actual,
+      [...(lockedRows ?? []).filter(r => !r.skipped).map(r => ({ date: r.date, workout: r.workout_json as Workout })), ...rows.map(r => ({ date: r.date, workout: r.workout_json }))]);
+    if (overlap) throw new PlanError(overlap, 422, "RECOVERY_CONFLICT");
+    const rev = reviewGeneratedWorkout(session, reviewContext);
     session = rev.corrected;
-    if (session.type !== "rest" && session.sections.every((s) => s.exercises.length === 0)) {
-      session = {
-        type: "rest", title: "Recovery / mobility", duration_minutes: 30,
-        tss_estimate: 10, rpe_target: 2, sections: [],
-        coach_note: "Held back: this day conflicted with an injury/constraint on file.",
-      } as Workout;
-    }
+    assertPublishable(session, reviewContext);
     if (rev.violations.length) weekViolations.push(`${date}: ${rev.violations.join("; ")}`);
+    weekIssues.push(...rev.issues.map(issue => ({ date, code: issue.code, message: issue.message })));
 
     // Advance the running state with the FINAL (reviewed) session so the next
     // day's checks see it.
@@ -444,41 +489,18 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
 
     rows.push({ user_id: userId, date, type: session.type, workout_json: session, llm_provider: outcome.provider, llm_model: outcome.model });
   }
-  const { data: inserted, error: insErr } = await admin.from("planned_workouts").insert(rows).select("id, date");
-  if (insErr) throw new Error(`save failed: ${insErr.message}`);
-
-  // Register any off-catalog exercises the model introduced in strength days.
-  for (const row of rows) {
-    if (row.type === "strength") {
-      await registerUnknownExercises(admin, userId, row.workout_json as Workout);
-    }
-  }
-
-  // Persist the week's rationale for the "explain this week" view.
-  await admin.from("week_plans").upsert(
-    { user_id: userId, start_date: start, focus: plan.week_focus, rationale: plan.rationale },
-    { onConflict: "user_id,start_date" },
-  );
-
-  let pushed = 0;
-  if (shouldPush && phys.apiKey && profile.intervals_athlete_id) {
-    for (const row of rows) {
-      const session = row.workout_json as Workout;
-      if (session.type === "rest") continue;
-      const id = inserted?.find((r) => r.date === row.date)?.id;
-      try {
-        const ev = await createEvent(profile.intervals_athlete_id, phys.apiKey, {
-          date: row.date, name: session.title, description: renderIntervalsWorkout(session),
-          type: session.type === "run" ? "Run" : session.type === "ride" ? "Ride" : session.type === "swim" ? "Swim" : "WeightTraining",
-        });
-        pushed++;
-        if (id) await admin.from("planned_workouts").update({ intervals_event_id: ev.id, pushed_at: new Date().toISOString() }).eq("id", id);
-      } catch (_e) { /* best-effort */ }
-    }
-  }
+  if (!rows.length) return { start_date: start, end_date: end, scheduled: 0, pushed: 0, days: [],
+    week_focus: plan.week_focus, rationale: "All requested dates are protected." };
+  const cost = estimateCostUsd(outcome.provider, outcome.promptTokens, outcome.completionTokens, customPriceFromProfile(outcome.provider, profile), outcome.model);
+  const saved = await replacePlan(admin, userId, generationId, requestScope, revision,
+    planFrom, end, rows.map(row => ({ ...row, sync_requested: shouldPush })),
+    { start_date: start, focus: plan.week_focus, rationale: plan.rationale },
+    { programs: athleteStates.flatMap(s => s.program_state ? [s.program_state] : []), athlete_states: athleteStates, focus:plan.week_focus,rationale:plan.rationale,provider:outcome.provider,model:outcome.model,estimated_cost_usd:cost,
+      review_violations: weekViolations, review_issues: weekIssues });
+  const sync = await drainCalendarOutbox(admin, userId);
+  const pushed = Object.keys(sync.events).length;
 
   // Still computed locally: the response reports it back to the caller.
-  const cost = estimateCostUsd(outcome.provider, outcome.promptTokens, outcome.completionTokens, customPriceFromProfile(outcome.provider, profile), outcome.model);
   await logLlmResult(admin, userId, "plan", hosted, outcome, profile, {
     systemPrompt: WEEK_SYSTEM_PROMPT,
     userPrompt,
@@ -497,6 +519,8 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   };
 }
 
+const log = logger("plan-week");
+
 Deno.serve(async (req) => {
   const pre = handleOptions(req);
   if (pre) return pre;
@@ -507,6 +531,7 @@ Deno.serve(async (req) => {
 
     // Cron path: plan NEXT week for every opted-in user. One failure doesn't abort.
     if (body?.all_users) {
+      if (req.headers.get("Authorization") !== `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`) return json({error:"unauthorized"},401);
       const start = nextMonday();
       const { data: users } = await admin.from("user_profiles").select("id").eq("auto_plan", true);
       const results: unknown[] = [];
@@ -523,10 +548,13 @@ Deno.serve(async (req) => {
 
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
-    const start: string = body.start_date ?? new Date().toISOString().slice(0, 10);
-    const result = await planForUser(admin, userId, start, body.push ?? true, body.calendar_busy ?? null);
+    const localToday = isoDate(body.today ?? new Date().toISOString().slice(0,10));
+    const start = isoDate(body.start_date ?? localToday);
+    const result = await planForUser(admin, userId, start, body.push ?? true, body.calendar_busy ?? null, requestId(body.request_id), localToday);
     return json(result);
   } catch (e) {
-    return json({ error: e instanceof Error ? e.message : String(e) }, errorStatus(e));
+    log.error("failed", { err: e instanceof Error ? e.message : String(e) });
+    return json({ error: e instanceof Error ? e.message : String(e),
+      ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) }, errorStatus(e));
   }
 });

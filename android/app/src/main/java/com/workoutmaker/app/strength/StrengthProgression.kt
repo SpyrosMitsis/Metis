@@ -18,6 +18,7 @@ data class LogSet(
     val isWarmup: Boolean = false,
     val muscle: String = "",
     val dateMillis: Long = 0L,
+    val quantityUnit: String = "reps",
 )
 
 private const val WEEK_MS = 7L * 24 * 60 * 60 * 1000
@@ -54,7 +55,7 @@ data class PrHit(val type: String, val detail: String) // type: weight | e1rm | 
 
 object Prs {
     fun record(history: List<LogSet>): PrRecord {
-        val w = history.filter { !it.isWarmup && it.reps > 0 }
+        val w = history.filter { !it.isWarmup && it.reps > 0 && it.quantityUnit == "reps" }
         if (w.isEmpty()) return PrRecord()
         val repPRs = HashMap<Int, Double>()
         for (s in w) {
@@ -71,7 +72,7 @@ object Prs {
 
     /** New PRs in [session] vs the [prior] record (call BEFORE folding the session in). */
     fun detect(prior: PrRecord, session: List<LogSet>): List<PrHit> {
-        val w = session.filter { !it.isWarmup && it.reps > 0 }
+        val w = session.filter { !it.isWarmup && it.reps > 0 && it.quantityUnit == "reps" }
         if (w.isEmpty()) return emptyList()
         val hits = mutableListOf<PrHit>()
         val newBestWeight = w.maxOf { it.weightKg }
@@ -108,7 +109,7 @@ object Progression {
         repHigh: Int,
         compound: Boolean,
     ): ProgressionSuggestion? {
-        val work = lastWorking.filter { !it.isWarmup && it.reps > 0 }
+        val work = lastWorking.filter { !it.isWarmup && it.reps > 0 && it.quantityUnit == "reps" }
         if (work.isEmpty()) return null
         val topWeight = work.maxOf { it.weightKg }
         val topSets = work.filter { it.weightKg >= topWeight - 1e-6 }
@@ -141,7 +142,7 @@ object VolumeBalance {
 
     /** Hard (working) set counts per muscle over the supplied window. */
     fun byMuscle(sets: List<LogSet>): List<MuscleVolume> =
-        sets.filter { !it.isWarmup && it.reps > 0 }
+        sets.filter { !it.isWarmup && it.reps > 0 && it.quantityUnit == "reps" }
             .groupBy { it.muscle.ifBlank { "Other" } }
             .map { (m, s) ->
                 val n = s.size
@@ -175,7 +176,7 @@ data class DeloadAdvice(val recommended: Boolean, val reason: String, val sugges
 object Deload {
     /** Bucket sets into ISO-ish epoch weeks (ascending). */
     fun weekly(sets: List<LogSet>): List<WeeklyVolume> {
-        val work = sets.filter { !it.isWarmup && it.reps > 0 && it.dateMillis > 0 }
+        val work = sets.filter { !it.isWarmup && it.reps > 0 && it.quantityUnit == "reps" && it.dateMillis > 0 }
         return work.groupBy { it.dateMillis / WEEK_MS }
             .toSortedMap()
             .map { (wk, s) ->

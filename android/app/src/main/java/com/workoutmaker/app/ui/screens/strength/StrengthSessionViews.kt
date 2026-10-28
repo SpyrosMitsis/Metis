@@ -6,6 +6,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,6 +91,7 @@ internal fun ActiveWorkoutView(vm: StrengthViewModel, onOpenStats: (String) -> U
     var showPlate by remember { mutableStateOf(false) }
     var confirmFinish by remember { mutableStateOf(false) }
     val finishHaptics = LocalHapticFeedback.current
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
     // Keep the screen awake during a workout when the user opts in.
     val view = LocalView.current
@@ -108,6 +113,7 @@ internal fun ActiveWorkoutView(vm: StrengthViewModel, onOpenStats: (String) -> U
     }
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
@@ -130,21 +136,11 @@ internal fun ActiveWorkoutView(vm: StrengthViewModel, onOpenStats: (String) -> U
             )
         },
         bottomBar = {
-            Column {
-                rest?.let { RestTimerBar(it, vm) }
-                status?.let {
-                    Text(it, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                }
-                Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = { vm.openPicker() }, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.Add, null); Text(" Add exercise")
-                    }
-                    OutlinedButton(onClick = { vm.startManualRest() }, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Filled.Timer, null); Text(" Rest")
-                    }
-                }
-            }
+            ActiveWorkoutBottomBar(
+                keyboardVisible = keyboardVisible, rest = rest, status = status,
+                timer = { remaining -> RestTimerBar(remaining, vm) },
+                onAddExercise = { vm.openPicker() }, onStartRest = { vm.startManualRest() },
+            )
         },
     ) { padding ->
         // Drag-to-reorder: exercise cards sit after the two header fields, so
@@ -216,6 +212,31 @@ internal fun ActiveWorkoutView(vm: StrengthViewModel, onOpenStats: (String) -> U
             confirmButton = { TextButton(onClick = { confirmFinish = false; finishHaptics.performHapticFeedback(HapticFeedbackType.LongPress); vm.finish() }) { Text(if (vm.isEditing) "Save" else "Finish") } },
             dismissButton = { TextButton(onClick = { confirmFinish = false }) { Text("Keep going") } },
         )
+    }
+}
+
+/** Keep the live countdown visible above the IME; secondary actions can wait until typing ends. */
+@Composable
+internal fun ActiveWorkoutBottomBar(
+    keyboardVisible: Boolean, rest: Int?, status: String?,
+    timer: @Composable (Int) -> Unit, onAddExercise: () -> Unit, onStartRest: () -> Unit,
+) {
+    Column {
+        rest?.let { timer(it) }
+        if (!keyboardVisible) {
+            status?.let {
+                Text(it, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+            Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onAddExercise, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.Add, null); Text(" Add exercise")
+                }
+                OutlinedButton(onClick = onStartRest, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Filled.Timer, null); Text(" Rest")
+                }
+            }
+        }
     }
 }
 

@@ -22,6 +22,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -303,7 +305,7 @@ private fun BodyMetricCard(
 }
 
 @Composable
-private fun QuickLogCard(onLog: (Double?, Double?, Double?) -> Unit) {
+internal fun QuickLogCard(onLog: (Double?, Double?, Double?) -> Unit) {
     var weight by remember { mutableStateOf("") }
     var fat by remember { mutableStateOf("") }
     var lean by remember { mutableStateOf("") }
@@ -313,19 +315,10 @@ private fun QuickLogCard(onLog: (Double?, Double?, Double?) -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                weight, { weight = it }, label = { Text("Weight kg") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                fat, { fat = it }, label = { Text("Fat %") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                lean, { lean = it }, label = { Text("Muscle kg") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f),
-            )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MeasurementField(weight, { weight = it }, "Weight", "kg", Modifier.weight(1f))
+            MeasurementField(fat, { fat = it }, "Fat", "%", Modifier.weight(1f))
+            MeasurementField(lean, { lean = it }, "Muscle", "kg", Modifier.weight(1f))
         }
         val w = weight.toDoubleOrNull()?.takeIf { it in 30.0..250.0 }
         val f = fat.toDoubleOrNull()?.takeIf { it in 3.0..60.0 }
@@ -335,5 +328,19 @@ private fun QuickLogCard(onLog: (Double?, Double?, Double?) -> Unit) {
             enabled = w != null || f != null || l != null,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Save measurement") }
+    }
+}
+
+@Composable
+private fun MeasurementField(value: String, onValue: (String) -> Unit, name: String, unit: String, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(name, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+        OutlinedTextField(
+            value, onValue,
+            singleLine = true,
+            suffix = { Text(unit, style = MaterialTheme.typography.bodySmall) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$name, $unit" },
+        )
     }
 }

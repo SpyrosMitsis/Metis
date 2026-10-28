@@ -5,7 +5,7 @@ import { type CoverageItem, matchCoverage } from "./analyze_core.ts";
 
 const P = (name: string, muscle: string | null): CoverageItem => ({ name, muscle });
 
-Deno.test("exact + substring names match without substitutions", () => {
+Deno.test("exact names match without substitutions", () => {
   const planned = [P("Machine Chest Press", "Chest"), P("Triceps Pushdown", "Triceps")];
   const logged = [P("Machine Chest Press", "Chest"), P("Triceps Pushdown", "Triceps")];
   const cov = matchCoverage(planned, logged);
@@ -14,7 +14,7 @@ Deno.test("exact + substring names match without substitutions", () => {
   assertEquals(cov.substitutions, []);
 });
 
-Deno.test("same-muscle swap counts as completed, not skipped", () => {
+Deno.test("same-muscle swap covers a slot but is explicitly identified as a substitution", () => {
   // The real case: planned Machine Bicep Curl, logged Preacher Curl (both Biceps),
   // plus a genuinely-skipped Stretching with no same-muscle lift performed.
   const planned = [P("Machine Bicep Curl", "Biceps"), P("Stretching", null)];
@@ -51,4 +51,17 @@ Deno.test("Other / Cardio / unknown muscles never substitute", () => {
   assertEquals(cov.done, 0);
   assertEquals(cov.substitutions, []);
   assertEquals(cov.skipped.length, 3);
+});
+
+Deno.test("substring exercise variants cannot inherit the original lift prescription", () => {
+  const cov = matchCoverage([P("Dumbbell Row", "Back")], [P("Chest-Supported Dumbbell Row", "Back")]);
+  assertEquals(cov.substitutions, [{ logged: "Chest-Supported Dumbbell Row", planned: "Dumbbell Row" }]);
+  assertEquals(matchCoverage([P("", null)], [P("Anything", null)]).done, 0);
+});
+
+Deno.test("exact exercise, curated movement and primary-muscle overlap remain distinct", () => {
+  const cov = matchCoverage([P("Barbell Bench Press", "Chest"), P("Cable Crossover", "Chest")], [P("Dumbbell Floor Press", "Chest"), P("Pec Deck", "Chest")]);
+  assertEquals(cov.exactDone, 0);
+  assertEquals(cov.movementDone, 1);
+  assertEquals(cov.done, 2);
 });

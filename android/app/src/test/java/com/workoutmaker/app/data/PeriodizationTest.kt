@@ -11,6 +11,21 @@ import kotlin.math.roundToInt
 class PeriodizationTest {
 
     @Test
+    fun `enabling a program supplies its start date once and preserves explicit dates`() {
+        val today = java.time.LocalDate.of(2026, 10, 27)
+        val started = Periodization.configure(TrainingProfile(), true, today)
+        assertTrue(started.periodized)
+        assertEquals("2026-10-27", started.program_started_on)
+        val paused = Periodization.configure(started, false, today.plusDays(7))
+        assertFalse(paused.periodized)
+        assertEquals(started.program_started_on, paused.program_started_on)
+        assertEquals(started, Periodization.configure(paused, true, today.plusDays(14)))
+        assertEquals("2026-10-01", Periodization.configure(TrainingProfile(program_started_on = "2026-10-01"), true, today).program_started_on)
+        assertEquals(null, Periodization.configure(TrainingProfile(), false, today).program_started_on)
+    }
+
+
+    @Test
     fun `builds for four weeks then deloads, repeating`() {
         val weeks = Periodization.projectedWeeks(baseTss = 350, weeks = 10)
 

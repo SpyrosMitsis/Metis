@@ -20,7 +20,7 @@ internal data class SavedSet(
 )
 
 @Serializable
-internal data class SavedExercise(val name: String, val restSec: Int, val sets: List<SavedSet>)
+internal data class SavedExercise(val name: String, val restSec: Int, val sets: List<SavedSet>, val quantityUnit: String = "reps")
 
 @Serializable
 internal data class SavedSession(
@@ -28,6 +28,7 @@ internal data class SavedSession(
     val workoutNote: String = "",
     val startedAt: Long,
     val linkedPlannedId: String? = null,
+    val prescribedTargets: Boolean = false,
     val linkedPlannedDate: String? = null,
     val editingWorkoutId: String? = null,
     val editingEndedAt: Long = 0L,

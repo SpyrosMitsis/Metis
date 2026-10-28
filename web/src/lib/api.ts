@@ -1,3 +1,4 @@
+import type { AdaptationProposal, SessionFeedback } from "@shared/adaptation";
 "use client";
 
 import { createClient } from "./supabase-browser";
@@ -89,6 +90,8 @@ export const api = {
     invoke<{ ok: boolean; athlete_name: string; athlete_id: string }>("connect-intervals", { athleteId, apiKey }),
 
   generateWorkout: (args: {
+    session_slot?: number;
+    objective?: import("@shared/prescription").SessionObjective;
     date?: string;
     type?: "run" | "ride" | "swim" | "strength" | "auto";
     duration?: number;
@@ -101,15 +104,20 @@ export const api = {
     invoke<{
       workout: Workout;
       workout_id: string;
-      provider: LlmProvider;
+      provider: LlmProvider | "deterministic";
       model: string;
       estimated_cost_usd: number;
       intervals_event_id: string | null;
       push_error: string | null;
-    }>("generate-workout", args),
+    }>("generate-workout", { ...args, date: args.date ?? localDate(), request_id: crypto.randomUUID() }),
+
+  sessionFeedback: (feedback:SessionFeedback) => invoke<{ok:boolean;planning_hold:boolean}>("session-feedback",{today:localDate(),feedback}),
+
+  adaptPlan: (action: "preview" | "apply" | "undo" | "history" = "preview", proposal_id?: string, options: { minutes?: number; unavailable_implements?: string[]; alternative_sport?: string } = {}) =>
+    invoke<{proposal?: AdaptationProposal; history?: AdaptationProposal[]; sync_error?: string; apply_allowed?:boolean}>("adapt-plan", {action, proposal_id, today:localDate(), ...options}),
 
   planWeek: (startDate?: string) =>
-    invoke<{ planned?: number; week?: unknown; error?: string }>("plan-week", { start_date: startDate }),
+    invoke<{ planned?: number; week?: unknown; error?: string }>("plan-week", { start_date: startDate ?? localDate(), today: localDate(), request_id: crypto.randomUUID() }),
 
   pushWorkout: (workout_id: string) =>
     invoke<{ ok: boolean; intervals_event_id: string }>("push-workout", { workout_id }),
@@ -149,7 +157,7 @@ export const api = {
   analyzeActivity: (activityId: string, opts?: { force?: boolean; peek?: boolean }) =>
     invoke<ActivityAnalysis>("analyze-activity", { activity_id: activityId, ...opts }),
 
-  analyzeStrength: (date: string, opts?: { force?: boolean; peek?: boolean }) =>
+  analyzeStrength: (date: string, opts?: { force?: boolean; peek?: boolean; workout_id?: string }) =>
     invoke<StrengthAnalysis>("analyze-strength", { date, ...opts }),
 
   coachFinalize: (
@@ -224,3 +232,5 @@ export async function coachChatStream(
   }
   return out;
 }
+
+function localDate() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }

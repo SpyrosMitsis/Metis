@@ -250,7 +250,7 @@ mgmt_token() {
 #   delete/deploy/download/list/new/serve only), so this used to fail with an
 #   "unknown flag: --project-ref" wall of help text that read like a broken
 #   project. Query the Management API's analytics endpoint directly instead:
-#   version-independent, and it survives a CLI upgrade.
+#   Uses the unified logs endpoint after the September 2026 removal of logs.all.
 cmd_fn_logs() {
   need curl; need jq; need_ref
   [[ $# -ge 1 ]] || die "usage: fn:logs <name> [minutes, default 60]"
@@ -259,12 +259,7 @@ cmd_fn_logs() {
   local token; token="$(mgmt_token)"
   [[ -n "$token" ]] || die "no Management API token: run 'supabase login', or set SUPABASE_ACCESS_TOKEN"
 
-  # Log rows identify the function by UUID, not by name.
-  local fid
-  fid="$(curl -fsS "https://api.supabase.com/v1/projects/$PROJECT_REF/functions" \
-    -H "Authorization: Bearer $token" \
-    | jq -r --arg n "$name" '.[] | select(.name == $n) | .id')"
-  [[ -n "$fid" && "$fid" != "null" ]] || die "no deployed function named '$name' in $PROJECT_REF"
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || die "invalid function name"
 
   # An explicit window is REQUIRED: with no timestamps the endpoint answers from
   # a window so narrow it reliably returns zero rows, which looks like "logging
@@ -274,8 +269,8 @@ cmd_fn_logs() {
   end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   say "logs $name (last ${mins}m) -> $PROJECT_REF  (tip: WM_LOG=debug for verbose JSON lines)"
-  curl -fsS -G "https://api.supabase.com/v1/projects/$PROJECT_REF/analytics/endpoints/logs.all" \
-    --data-urlencode "sql=select t.timestamp, t.event_message from function_logs t cross join unnest(t.metadata) as m where m.function_id = '$fid' order by t.timestamp desc limit 200" \
+  curl -fsS -G "https://api.supabase.com/v1/projects/$PROJECT_REF/analytics/endpoints/logs" \
+    --data-urlencode "sql=select timestamp, event_message from logs where event_message like '%\"fn\":\"$name\"%' or event_message like '%/functions/v1/$name%' order by timestamp desc limit 200" \
     --data-urlencode "iso_timestamp_start=$start" \
     --data-urlencode "iso_timestamp_end=$end" \
     -H "Authorization: Bearer $token" \
@@ -283,9 +278,9 @@ cmd_fn_logs() {
         if .error then "error: \(.error)"
         elif (.result | length) == 0 then "(no log lines in the window, try a larger \"minutes\")"
         # Oldest first, so a turn reads top to bottom like a transcript. The
-        # timestamp is microseconds since the epoch.
+        # new endpoint returns ISO timestamps rather than epoch microseconds.
         else (.result | reverse | .[] |
-              "\((.timestamp / 1000000) | strftime("%H:%M:%S"))  \(.event_message | sub("\\s+$"; ""))")
+              "\(.timestamp | tostring | .[11:19])  \(.event_message | sub("\\s+$"; ""))")
         end'
 }
 

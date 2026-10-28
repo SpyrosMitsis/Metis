@@ -1,5 +1,7 @@
 package com.workoutmaker.app.work
 
+import com.workoutmaker.app.util.runCatching
+
 import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
@@ -46,8 +48,11 @@ class FeedbackSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        // Not signed in → nothing to do (don't retry forever).
-        if (repo.auth.currentUserOrNull() == null) return Result.success()
+        // Never submit one account's queued feedback under another account.
+        // Legacy jobs without an owner cannot safely be attributed.
+        val owner = inputData.getString(KEY_OWNER) ?: return Result.failure()
+        val current = repo.auth.currentUserOrNull()?.id ?: return Result.retry()
+        if (current != owner) return Result.failure()
         val date = inputData.getString(KEY_DATE) ?: return Result.success()
         val rpe = inputData.getInt(KEY_RPE, -1).takeIf { it in 1..10 }
         val difficulty = inputData.getString(KEY_DIFFICULTY)?.takeIf { it.isNotBlank() }
@@ -57,16 +62,18 @@ class FeedbackSyncWorker @AssistedInject constructor(
         val painArea = inputData.getString(KEY_PAIN_AREA)?.takeIf { it.isNotBlank() }
         val pain = inputData.getInt(KEY_PAIN, -1).takeIf { it in 1..5 }
         return try {
+            repo.withAccount(owner) {
+            val feedbackId = inputData.getString(KEY_FEEDBACK_ID) ?: id.toString()
             if (plannedId != null) {
                 // Marks the planned row done/skipped AND writes the rating, and
                 // is idempotent per planned session (it replaces any existing
                 // feedback row), so a retry after a partial failure is safe.
-                repo.markPlannedComplete(plannedId, date, completed = completed, difficulty = difficulty, rpe = rpe)
+                repo.markPlannedComplete(plannedId, date, completed = completed, difficulty = difficulty, rpe = rpe, feedbackId = feedbackId, notes = notes)
             } else if (rpe != null || difficulty != null) {
                 // Only write a feedback row when there's an actual rating; a bare
                 // "completed" is already implied by the synced session.
                 repo.submitFeedback(
-                    WorkoutFeedback(date = date, completed = completed, actual_rpe = rpe, difficulty = difficulty, notes = notes),
+                    WorkoutFeedback(id = feedbackId, date = date, completed = completed, actual_rpe = rpe, difficulty = difficulty, notes = notes),
                 )
             }
             // The pain answer rides on the same queued item so it cannot be the
@@ -78,6 +85,9 @@ class FeedbackSyncWorker @AssistedInject constructor(
             // Fold the session into the coach's rolling memory; best-effort.
             runCatching { repo.refreshMemory() }
             Result.success()
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             // Network/transient failure → retry with backoff.
             Result.retry()
@@ -85,6 +95,8 @@ class FeedbackSyncWorker @AssistedInject constructor(
     }
 
     companion object {
+        private const val KEY_FEEDBACK_ID = "feedback_id"
+        private const val KEY_OWNER = "owner_uid"
         private const val KEY_DATE = "date"
         private const val KEY_RPE = "rpe"
         private const val KEY_DIFFICULTY = "difficulty"
@@ -101,16 +113,22 @@ class FeedbackSyncWorker @AssistedInject constructor(
             rpe: Int?,
             difficulty: String?,
             notes: String?,
+            ownerUid: String?,
+            feedbackId: String = java.util.UUID.randomUUID().toString(),
             plannedId: String? = null,
             completed: Boolean = true,
             painArea: String? = null,
             pain: Int? = null,
         ) {
+            if (ownerUid.isNullOrBlank()) return
             val req = OneTimeWorkRequestBuilder<FeedbackSyncWorker>()
+                .addTag("account-sync")
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
                 .setInputData(
                     workDataOf(
+                        KEY_FEEDBACK_ID to feedbackId,
+                        KEY_OWNER to ownerUid,
                         KEY_DATE to date,
                         KEY_RPE to (rpe ?: -1),
                         KEY_DIFFICULTY to (difficulty ?: ""),

@@ -297,7 +297,7 @@ internal fun AiSection(vm: SettingsViewModel) {
 }
 
 @Composable
-internal fun ProviderCard(mod: Modifier, provider: LlmProvider, vm: SettingsViewModel) {
+internal fun ProviderCard(modifier: Modifier, provider: LlmProvider, vm: SettingsViewModel) {
     var key by remember { mutableStateOf("") }
     val result = vm.results[provider.key]
     val overrides by vm.modelOverrides.collectAsStateSafe()
@@ -316,7 +316,7 @@ internal fun ProviderCard(mod: Modifier, provider: LlmProvider, vm: SettingsView
         ModelPickerDialog(provider, vm) { showModelPicker = false }
     }
 
-    SectionCard(mod, title = "${provider.label}${if (provider.freeTier) "  · free tier" else ""}") {
+    SectionCard(modifier, title = "${provider.label}${if (provider.freeTier) "  · free tier" else ""}") {
         if (isCustom) {
             Text(
                 "Point at any OpenAI-compatible endpoint. Ollama, LM Studio, vLLM, OpenRouter, a LiteLLM proxy. The phone must be able to reach the URL.",

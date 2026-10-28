@@ -9,6 +9,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
+import androidx.room.Transaction
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -81,6 +82,12 @@ interface CacheDao {
     @Query("DELETE FROM cached_workout WHERE date >= :fromDate")
     suspend fun clearWorkoutsFrom(fromDate: String)
 
+    @Transaction
+    suspend fun replaceWorkoutsFrom(fromDate: String, items: List<CachedWorkout>) {
+        clearWorkoutsFrom(fromDate)
+        upsertWorkouts(items)
+    }
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertSummary(summary: CachedSummary)
 
@@ -115,7 +122,7 @@ interface CacheDao {
         WorkoutEntity::class, SetEntity::class, RoutineEntity::class, RoutineItemEntity::class,
         CustomExerciseEntity::class, FavoriteEntity::class, TombstoneEntity::class,
     ],
-    version = 8,
+    version = 9,
     // Export the schema so app/schemas/*.json is a committed baseline. Without
     // it Room cannot see an accidental entity change at build time, and the
     // first symptom is an IllegalStateException on a user's phone at open.
@@ -168,13 +175,20 @@ private val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+internal val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE strength_set ADD COLUMN quantityUnit TEXT NOT NULL DEFAULT 'reps'")
+        db.execSQL("ALTER TABLE strength_workout ADD COLUMN plannedWorkoutId TEXT")
+    }
+}
+
 @Module
 @InstallIn(SingletonComponent::class)
 object CacheModule {
     @Provides @Singleton
     fun provideDb(@ApplicationContext ctx: Context): AppDatabase =
         Room.databaseBuilder(ctx, AppDatabase::class.java, "workoutmaker.db")
-            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             // A missed migration must crash in development, not silently wipe
             // users' local strength history. Downgrades (sideloading an older
             // build) may still recreate.

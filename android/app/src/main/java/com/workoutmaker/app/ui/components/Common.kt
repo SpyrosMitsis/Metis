@@ -531,15 +531,12 @@ object Metrics {
         "can be compared fairly."
 
     const val FITNESS =
-        "These come from Intervals.icu and model your training load over time:\n\n" +
-        "• Fitness (CTL): your 42-day rolling average load. Climbs slowly as you train " +
-        "consistently; this is your engine.\n" +
-        "• Fatigue (ATL): your 7-day average load. Rises and falls fast with recent hard days.\n" +
-        "• Form (TSB) = Fitness − Fatigue. Positive = fresh/tapered; deeply negative = buried in " +
-        "fatigue. Race on slightly positive form.\n" +
-        "• Ramp: how fast Fitness is rising. Too fast is an injury risk; the load guardrail watches this.\n\n" +
-        "The curve shows Fitness vs Fatigue over recent weeks, you want Fitness trending up with " +
-        "Fatigue swinging beneath it."
+        "These are models of recorded training load, not direct tests of fitness or recovery:\n\n" +
+        "• Fitness (CTL): a smoothed longer-term load estimate, commonly using 42 days.\n" +
+        "• Fatigue (ATL): a smoothed recent load estimate, commonly using 7 days.\n" +
+        "• Form (TSB) = CTL minus ATL. It describes the difference between these models.\n" +
+        "• Ramp: how quickly the modeled load is changing.\n\n" +
+        "Interpret these alongside actual training, symptoms and how you feel. A ratio alone does not predict injury or establish readiness."
 
     const val WEEK_CARD =
         "The week card summarises the current training week: how many sessions are planned vs done, " +

@@ -128,7 +128,7 @@ internal fun StepPermissions(vm: OnboardingViewModel) {
             granted = notifGranted,
         ) {
             GhostButton(
-                onClick = { notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) },
+                onClick = { if (android.os.Build.VERSION.SDK_INT >= 33) notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS) },
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Allow notifications") }
         }
@@ -144,7 +144,7 @@ internal fun StepPermissions(vm: OnboardingViewModel) {
         ) {
             GhostButton(
                 onClick = {
-                    runCatching {
+                    if (android.os.Build.VERSION.SDK_INT >= 31) runCatching {
                         context.startActivity(
                             Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
                         )

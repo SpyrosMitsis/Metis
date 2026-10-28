@@ -42,10 +42,10 @@ import java.time.format.DateTimeFormatter
 // readiness score. Sleep is pulled automatically from Intervals.icu, so it's no
 // longer asked here. Appears only when today is unanswered.
 @Composable
-internal fun WellnessCheckinCard(mod: Modifier, busy: Boolean, onSave: (Int, Int) -> Unit) {
+internal fun WellnessCheckinCard(modifier: Modifier, busy: Boolean, onSave: (Int, Int) -> Unit) {
     var energy by rememberSaveable { mutableStateOf<Int?>(null) }
     var soreness by rememberSaveable { mutableStateOf<Int?>(null) }
-    SectionCard(mod, title = "How do you feel today?") {
+    SectionCard(modifier, title = "How do you feel today?") {
         Text(
             "A quick morning check tunes today's readiness and training. Sleep is pulled from Intervals.icu automatically.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -116,13 +116,13 @@ internal fun WellnessScale(label: String, low: String, high: String, selected: I
 // _shared/injury.ts) so the coach and the card word it the same way.
 @Composable
 internal fun InjuryCheckinCard(
-    mod: Modifier,
+    modifier: Modifier,
     checkin: InjuryCheckin,
     busy: Boolean,
     onAnswer: (String) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
-    SectionCard(mod, title = checkin.question) {
+    SectionCard(modifier, title = checkin.question) {
         Text(
             "It changes what I program. Nothing else, no follow-up questions.",
             style = MaterialTheme.typography.bodySmall,
@@ -152,10 +152,10 @@ internal fun InjuryCheckinCard(
 // palette note in CLAUDE.md). Shown because training that quietly changes shape
 // is worse than training that says why it changed.
 @Composable
-internal fun InjuryBackoffBanner(mod: Modifier, backoffs: List<InjuryBackoff>) {
+internal fun InjuryBackoffBanner(modifier: Modifier, backoffs: List<InjuryBackoff>) {
     if (backoffs.isEmpty()) return
     val amber = amberAccent()
-    SectionCard(mod) {
+    SectionCard(modifier) {
         backoffs.forEach { b ->
             Text(
                 backoffLine(b),

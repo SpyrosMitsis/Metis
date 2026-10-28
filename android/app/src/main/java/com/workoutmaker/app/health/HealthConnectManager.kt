@@ -1,5 +1,7 @@
 package com.workoutmaker.app.health
 
+import com.workoutmaker.app.util.runCatching
+
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
@@ -25,7 +27,6 @@ import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import androidx.health.connect.client.records.Record
-import com.workoutmaker.app.data.adaptWeek
 
 /** A day's wellness snapshot read from Health Connect. All fields are optional. */
 data class HealthSnapshot(
@@ -52,6 +53,10 @@ data class HcExercise(
     val durationSec: Int,
     val distanceM: Double? = null,
     val avgHr: Int? = null,
+    val endDate: String? = null,
+    val timezoneName: String? = null,
+    val timezoneProvenance: String = "unavailable",
+    val origin: String? = null,
 )
 
 @Singleton
@@ -284,9 +289,13 @@ class HealthConnectManager @Inject constructor(
         val zone = ZoneId.systemDefault()
         val now = Instant.now()
         val window = TimeRangeFilter.between(now.minus(Duration.ofDays(days.toLong())), now)
-        val sessions = runCatching {
-            client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, window)).records
-        }.getOrDefault(emptyList())
+        val sessions = mutableListOf<ExerciseSessionRecord>()
+        var pageToken: String? = null
+        do {
+            val page = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, window, pageToken = pageToken))
+            sessions.addAll(page.records)
+            pageToken = page.pageToken
+        } while (pageToken != null)
         return sessions.mapNotNull { s ->
             val durationSec = Duration.between(s.startTime, s.endTime).seconds.toInt()
             if (durationSec < 60) return@mapNotNull null // discard sub-minute noise
@@ -300,7 +309,11 @@ class HealthConnectManager @Inject constructor(
             HcExercise(
                 uid = s.metadata.id,
                 type = exerciseTypeName(s.exerciseType),
-                date = s.startTime.atZone(zone).toLocalDate().toString(),
+                date = s.startTime.atOffset(s.startZoneOffset ?: zone.rules.getOffset(s.startTime)).toLocalDate().toString(),
+                endDate = s.endTime.atOffset(s.endZoneOffset ?: zone.rules.getOffset(s.endTime)).toLocalDate().toString(),
+                timezoneName = s.startZoneOffset?.id ?: zone.id,
+                timezoneProvenance = if (s.startZoneOffset != null) "recorded_offset" else "device_zone_fallback",
+                origin = s.metadata.dataOrigin.packageName,
                 startMs = s.startTime.toEpochMilli(),
                 endMs = s.endTime.toEpochMilli(),
                 durationSec = durationSec,
@@ -310,7 +323,7 @@ class HealthConnectManager @Inject constructor(
         }
     }
 
-    // Names are chosen to satisfy the app's type matching (adaptWeek's
+    // Names are chosen to satisfy the app's type matching (activity reconciliation's
     // typeMatches, daily-summary's sportOf). Unknown types map to "Other",
     // NOT "Workout": "workout" substring-matches planned strength and would
     // auto-complete gym sessions from any unclassified activity.

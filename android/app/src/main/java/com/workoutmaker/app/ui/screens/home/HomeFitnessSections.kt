@@ -56,26 +56,26 @@ import com.workoutmaker.app.ui.theme.amberAccent
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun FitnessSection(
-    mod: Modifier,
+    modifier: Modifier,
     f: IntervalsStats,
     onOpenActivity: (IntervalsActivity) -> Unit = {},
 ) {
     if (!f.connected) {
-        SectionCard(mod, title = "Fitness (Intervals.icu)") {
+        SectionCard(modifier, title = "Fitness (Intervals.icu)") {
             Text("Connect Intervals.icu in Settings to see your fitness curve, HR zones and recent activities here.",
                 style = MaterialTheme.typography.bodyMedium)
         }
         return
     }
     if (f.error != null) {
-        SectionCard(mod, title = "Fitness (Intervals.icu)") {
+        SectionCard(modifier, title = "Fitness (Intervals.icu)") {
             Text(friendlyError(f.error), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error)
         }
         return
     }
 
-    SectionCard(mod, title = "Fitness" + (f.athlete_name?.let { " · $it" } ?: "")) {
+    SectionCard(modifier, title = "Fitness" + (f.athlete_name?.let { " · $it" } ?: "")) {
         f.summary?.let { s ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -111,7 +111,7 @@ internal fun FitnessSection(
     // not an at-a-glance dashboard signal. (Still available in Intervals.icu.)
 
     if (f.activities.isNotEmpty()) {
-        SectionCard(mod, title = "Recent activities") {
+        SectionCard(modifier, title = "Recent activities") {
             f.activities.take(8).forEach { a ->
                 Row(
                     Modifier.fillMaxWidth().clickable { onOpenActivity(a) }.padding(vertical = 4.dp),
@@ -142,25 +142,24 @@ internal fun FitnessSection(
 }
 
 // E3 — acute:chronic load guardrail. Uses the fatigue:fitness ratio (ATL/CTL),
-// a well-established overload proxy, plus the 7-day CTL ramp. Flags when you're
-// building too fast (injury risk) or detraining.
+// A description of recorded load and its recent trend; not an injury prediction.
 @Composable
 private fun LoadGuard(s: FitnessSummary) {
     if (s.ctl < 1.0) return // not enough data to judge
     val ratio = s.atl / s.ctl
     val (color, headline, detail) = when {
         ratio >= 1.5 -> Triple(
-            MaterialTheme.colorScheme.error, "High overload risk",
-            "Fatigue is well above your fitness (ratio %.2f). Take easy days, an injury/illness spike zone.".format(ratio))
+            amberAccent(), "Recent recorded load is higher",
+            "ATL/CTL ratio %.2f describes modeled load, not individual injury risk. Review actual training and how you feel.".format(ratio))
         ratio >= 1.3 || s.ramp >= 8 -> Triple(
-            amberAccent(), "Ramping fast",
-            "Building quickly (ratio %.2f, ramp %+.1f). Fine short-term; don't hold it for many weeks.".format(ratio, s.ramp))
+            amberAccent(), "Recorded load is increasing",
+            "Ratio %.2f, ramp %+.1f. Interpret this with your actual training and response, not as a readiness verdict.".format(ratio, s.ramp))
         ratio < 0.8 && s.ramp < 0 -> Triple(
-            amberAccent(), "Detraining / very fresh",
-            "Load is low relative to fitness (ratio %.2f). Good for a taper; otherwise add volume.".format(ratio))
+            amberAccent(), "Recent recorded load is lower",
+            "Ratio %.2f may reflect rest, changed plans or missing recordings. Do not add work just to raise the ratio.".format(ratio))
         else -> Triple(
-            MaterialTheme.colorScheme.primary, "Load well managed",
-            "Fatigue:fitness ratio %.2f sits in the productive 0.8-1.3 range.".format(ratio))
+            MaterialTheme.colorScheme.primary, "Recorded load context",
+            "ATL/CTL ratio %.2f is descriptive. It does not establish training quality or recovery.".format(ratio))
     }
     Row(
         Modifier.fillMaxWidth().padding(top = 8.dp)

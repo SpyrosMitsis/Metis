@@ -1,3 +1,4 @@
+import { prescriptionEffortMinutes } from "./prescription.ts";
 // ============================================================================
 // plan_checks — deterministic checks for the rules that were prose-only.
 //
@@ -168,6 +169,7 @@ const pct = (n: number) => `${Math.round(n * 100)}%`;
  * trustworthy as that TSS, no more and no less.
  */
 function zonedMinutes(w: Workout): { zone: string; mins: number }[] {
+  if (w.prescription) return prescriptionEffortMinutes(w.prescription);
   if (w.type !== "run" && w.type !== "ride" && w.type !== "swim") return [];
   const out: { zone: string; mins: number }[] = [];
   for (const sec of w.sections) {

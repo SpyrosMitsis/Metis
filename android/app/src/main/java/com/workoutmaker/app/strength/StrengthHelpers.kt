@@ -45,7 +45,7 @@ data class ExerciseStats(
 object StrengthStats {
     /** Reduce raw sets (with their workout dates) into per-session points + PRs. */
     fun compute(name: String, sets: List<SetWithDate>): ExerciseStats {
-        val working = sets.filter { !it.isWarmup }
+        val working = sets.filter { !it.isWarmup && it.quantityUnit == "reps" && ExerciseMetadataCatalog.byName[name]?.loadMode !in listOf("band", "assistance") }
         val byDay = working.groupBy { it.startedAt }
         val points = byDay.entries
             .sortedBy { it.key }

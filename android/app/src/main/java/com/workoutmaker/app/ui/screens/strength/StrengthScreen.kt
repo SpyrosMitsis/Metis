@@ -170,20 +170,26 @@ internal fun StrengthHomeView(
         },
         isRefreshing = loading,
         onRefresh = { vm.loadHome() },
-    ) { mod ->
-        status?.let { Text(it, mod, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary) }
+    ) { modifier ->
+        status?.let { Text(it, modifier, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary) }
         if (pendingSync > 0) {
             Text("⟳ $pendingSync change${if (pendingSync > 1) "s" else ""} saved offline, will sync when you're back online.",
-                mod, style = MaterialTheme.typography.bodySmall, color = amberAccent())
+                modifier, style = MaterialTheme.typography.bodySmall, color = amberAccent())
         }
 
         // Deload banner (B2)
-        report?.deload?.takeIf { it.recommended }?.let { DeloadBanner(mod, it.reason) }
+        report?.deload?.takeIf { it.recommended }?.let { DeloadBanner(modifier, it.reason) }
 
         // Today's planned strength session(s) from the calendar — the plan is
         // the headline of this tab when one exists.
         todayPlanned.forEach { pw ->
-            TodayPlannedCard(mod, pw, onStart = { vm.startPlannedFromHome(pw) })
+            val undoing by vm.undoingPlanned.collectAsStateSafe()
+            TodayPlannedCard(
+                modifier, pw,
+                onStart = { vm.startPlannedFromHome(pw) },
+                onMarkUndone = { vm.markPlannedUndone(pw.id) },
+                undoEnabled = undoing == null,
+            )
         }
 
         // Start actions: AI generate is the primary path; empty/repeat are the
@@ -191,10 +197,10 @@ internal fun StrengthHomeView(
         Button(
             onClick = { vm.generateAiLift() },
             enabled = !loading,
-            modifier = mod.height(52.dp),
+            modifier = modifier.height(52.dp),
             shape = RoundedCornerShape(12.dp),
         ) { Icon(Icons.Filled.AutoAwesome, null); Text("  Generate today's lift with AI") }
-        Row(mod, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             GhostButton(onClick = { vm.startEmpty() }, modifier = Modifier.weight(1f).height(48.dp)) {
                 Icon(Icons.Filled.Add, null); Text("  Empty")
             }
@@ -204,11 +210,11 @@ internal fun StrengthHomeView(
         }
 
         // Weekly volume + balance (B5)
-        report?.let { WeeklyVolumeCard(mod, it) }
+        report?.let { WeeklyVolumeCard(modifier, it) }
 
-        SectionLabel("Or run your own plan", mod)
+        SectionLabel("Or run your own plan", modifier)
 
-        SectionCard(mod, title = "Routines") {
+        SectionCard(modifier, title = "Routines") {
             Text(
                 "A reusable template for a single session, your exercises pre-loaded so you can start a workout in one tap (e.g. “Push Day”).",
                 style = MaterialTheme.typography.bodySmall,
@@ -256,7 +262,7 @@ internal fun StrengthHomeView(
         }
 
         // Program builder (B4)
-        ProgramsCard(mod, vm.programs) { vm.createProgram(it) }
+        ProgramsCard(modifier, vm.programs) { vm.createProgram(it) }
     }
 }
 
@@ -264,14 +270,17 @@ internal fun StrengthHomeView(
 // into the logger (same handoff the Calendar's "Log this session" uses).
 @Composable
 internal fun TodayPlannedCard(
-    mod: Modifier,
+    modifier: Modifier,
     pw: PlannedWorkout,
     onStart: () -> Unit,
+    onMarkUndone: () -> Unit,
+    undoEnabled: Boolean = true,
 ) {
-    SectionCard(mod, title = "Today's plan") {
+    SectionCard(modifier, title = "Today's plan") {
         WorkoutDetail(pw.workout_json)
         if (pw.completed) {
             Text("✓ Completed", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            TextButton(onClick = onMarkUndone, enabled = undoEnabled) { Text("Mark as not done") }
         } else {
             Button(
                 onClick = onStart,
@@ -286,8 +295,8 @@ internal fun TodayPlannedCard(
 }
 
 @Composable
-internal fun DeloadBanner(mod: Modifier, reason: String) {
-    Box(mod.background(amberAccent().copy(alpha = 0.18f), RoundedCornerShape(14.dp)).padding(14.dp)) {
+internal fun DeloadBanner(modifier: Modifier, reason: String) {
+    Box(modifier.background(amberAccent().copy(alpha = 0.18f), RoundedCornerShape(14.dp)).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("⚠️", Modifier.padding(end = 10.dp))
             Column {
@@ -299,8 +308,8 @@ internal fun DeloadBanner(mod: Modifier, reason: String) {
 }
 
 @Composable
-internal fun WeeklyVolumeCard(mod: Modifier, report: WeeklyReport) {
-    SectionCard(mod, title = "This week's volume") {
+internal fun WeeklyVolumeCard(modifier: Modifier, report: WeeklyReport) {
+    SectionCard(modifier, title = "This week's volume") {
         Text("${report.totalHardSets} hard sets · target 10-20 per muscle",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (report.muscleVolume.isEmpty()) {
@@ -334,9 +343,9 @@ internal fun VolumeBar(mv: MuscleVolume) {
 }
 
 @Composable
-internal fun ProgramsCard(mod: Modifier, programs: List<StrengthProgram>, onAdd: (StrengthProgram) -> Unit) {
+internal fun ProgramsCard(modifier: Modifier, programs: List<StrengthProgram>, onAdd: (StrengthProgram) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    SectionCard(mod, title = "Programs") {
+    SectionCard(modifier, title = "Programs") {
         Text(
             "A multi-week training plan (e.g. a 3-day full-body block). Adding one creates a routine for " +
                 "each training day, and auto-progression bumps the loads week to week, so a program is " +

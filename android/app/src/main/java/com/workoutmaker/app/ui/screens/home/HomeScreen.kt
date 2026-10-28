@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.workoutmaker.app.data.LlmProvider
 import com.workoutmaker.app.data.Workout
+import com.workoutmaker.app.data.workoutChoiceRequest
+import com.workoutmaker.app.ui.components.WorkoutChoice
 import com.workoutmaker.app.ui.collectAsStateSafe
 import com.workoutmaker.app.ui.components.GhostButton
 import com.workoutmaker.app.ui.components.InfoIcon
@@ -149,11 +151,14 @@ fun HomeScreen(
 
     // Ask for coarse location only when first generating (for weather); proceed
     // regardless of the answer.
+    var workoutSport by rememberSaveable { mutableStateOf("auto") }
+    var workoutFocus by rememberSaveable { mutableStateOf("") }
+    var instruction by rememberSaveable { mutableStateOf("") }
     val locLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { vm.generate() }
+    ) { vm.generate(workoutSport, workoutChoiceRequest(workoutSport, workoutFocus, instruction)) }
     fun startGenerate() {
-        if (vm.hasLocation()) vm.generate()
+        if (vm.hasLocation()) vm.generate(workoutSport, workoutChoiceRequest(workoutSport, workoutFocus, instruction))
         else locLauncher.launch(android.Manifest.permission.ACCESS_COARSE_LOCATION)
     }
 
@@ -354,14 +359,14 @@ fun HomeScreen(
         SectionCard(mod) {
             if (isStale && !unmeasured) RecoveryStaleBanner(s.recovery_synced_date)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (unmeasured) ReadinessUnknownRing() else ReadinessRing(score, band)
+                if (unmeasured || s.readiness_context?.status == "pause") ReadinessUnknownRing() else ReadinessRing(score, band)
                 Column(
                     Modifier.padding(start = 16.dp).weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (unmeasured) "Readiness not measured" else readinessHeadline(band),
+                            when(s.readiness_context?.status) { "pause" -> "Affected training on hold"; "caution" -> "Review today’s training load"; else -> if (unmeasured) "Readiness not measured" else readinessHeadline(band) },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = if (unmeasured) MaterialTheme.colorScheme.onSurfaceVariant
@@ -369,7 +374,7 @@ fun HomeScreen(
                         )
                         InfoIcon("Recovery & readiness", Metrics.RECOVERY)
                     }
-                    rec?.summary?.takeIf { it.isNotBlank() }?.let {
+                    (s.readiness_context?.next_action ?: rec?.summary)?.takeIf { it.isNotBlank() }?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -378,7 +383,7 @@ fun HomeScreen(
             // The coach's proactive note for today — the human voice on top of the
             // numbers. Streams in after the dashboard; absent → the static headline
             // above already carries the readiness read, so nothing extra shows.
-            brief?.takeIf { it.isNotBlank() }?.let { QuoteBlock(it) }
+            brief?.takeIf { it.isNotBlank() && s.readiness_context?.status !in listOf("pause","caution") }?.let { QuoteBlock(it) }
 
             // Drill-in toggle. Collapsed by default — the signals are one tap away.
             TextButton(
@@ -396,6 +401,7 @@ fun HomeScreen(
 
             androidx.compose.animation.AnimatedVisibility(visible = showDetails) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    s.readiness_context?.conflicts?.forEach { Text(it,style=MaterialTheme.typography.bodySmall) }
                     // Why the score is what it is — compact chips ("HRV ↑", "Sleep ↓").
                     rec?.drivers?.takeIf { it.isNotEmpty() }?.let { ds ->
                         FlowRow(
@@ -561,20 +567,18 @@ fun HomeScreen(
             if (isToday) {
                 // Tweak field guides the (re)generation; the button sits below it and
                 // regenerates WITH whatever you typed (no separate "Adjust").
-                var instruction by rememberSaveable { mutableStateOf("") }
-                if (w != null) {
+                WorkoutChoice(workoutSport, workoutFocus, { workoutSport = it }, { workoutFocus = it }, enabled = !generating)
                     OutlinedTextField(
                         value = instruction,
                         onValueChange = { instruction = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Tweak the regenerate (optional)") },
+                        label = { Text("Workout notes (optional)") },
                         placeholder = { Text("e.g. shorter, I'm sore, add hills, make it easy") },
                     )
-                }
                 Button(
                     onClick = {
                         if (w == null) startGenerate()
-                        else { vm.regenerate(instruction.trim()); instruction = "" }
+                        else vm.regenerate(workoutChoiceRequest(workoutSport, workoutFocus, instruction), workoutSport)
                     },
                     enabled = !generating,
                     modifier = Modifier.fillMaxWidth(),
@@ -584,12 +588,16 @@ fun HomeScreen(
             if (w != null) {
                 // #1: the rating appears only AFTER you say you did the workout.
                 when {
-                    s.today_workout?.completed == true ->
+                    s.today_workout?.completed == true -> {
                         Text(
                             if (isRest) (if (isToday) "✓ Rested today" else "✓ Rested")
                             else (if (isToday) "✓ Completed today" else "✓ Completed"),
                             style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
                         )
+                        TextButton(onClick = { vm.markUndone() }, enabled = !submittingFeedback) {
+                            Text("Mark as not done")
+                        }
+                    }
                     !isToday ->
                         Text("Not logged as done.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     // Rest days don't need RPE/difficulty — one quiet tap to mark it.

@@ -19,6 +19,10 @@ import java.time.temporal.ChronoUnit
 // which is what periodization means). This projection resumes the ramp from the
 // last build peak. If plan-week is fixed, this needs no change.
 object Periodization {
+    /** Starting a program should not require a second, technical date setting. */
+    fun configure(profile: TrainingProfile, enabled: Boolean, today: LocalDate = LocalDate.now()): TrainingProfile =
+        profile.copy(periodized = enabled, program_started_on = profile.program_started_on ?: today.toString().takeIf { enabled })
+
     /** Build weeks before a deload is due. */
     const val DELOAD_AFTER = 4
 

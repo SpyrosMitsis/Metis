@@ -1,5 +1,7 @@
 package com.workoutmaker.app.work
 
+import com.workoutmaker.app.util.runCatching
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -55,7 +57,7 @@ class FeedbackPromptWorker @AssistedInject constructor(
 
             val acts = repo.completedActivities(today).filter { it.date == today }
             val match = planned.firstNotNullOfOrNull { p ->
-                acts.firstOrNull { a -> FeedbackNotificationContent.typeLooksLike(p.type, a.type) }
+                acts.firstOrNull { a -> a.planned_workout_id == p.id }
                     ?.let { p to it }
             }
             val done = match?.first ?: planned.firstOrNull { it.completed } ?: return@runCatching null

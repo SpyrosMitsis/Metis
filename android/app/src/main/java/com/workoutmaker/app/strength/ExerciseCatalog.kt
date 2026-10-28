@@ -9,10 +9,46 @@ data class Exercise(
     val category: String,      // Barbell | Dumbbell | Machine | Cable | Bodyweight | Kettlebell | Cardio
     val compound: Boolean = false,
     val defaultRestSec: Int = if (compound) 150 else 90,
-)
+) {
+    val id: String get() = name.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+}
 
 object ExerciseCatalog {
     val all: List<Exercise> = listOf(
+        Exercise("Wall Push-Up", "Chest", "Bodyweight", compound = true),
+        Exercise("Resistance Band Row", "Back", "Band", compound = true),
+        Exercise("Resistance Band Chest Press", "Chest", "Band", compound = true),
+        Exercise("Resistance Band Pull-Apart", "Shoulders", "Band", compound = false),
+        Exercise("Resistance Band Bicep Curl", "Biceps", "Band", compound = false),
+        Exercise("Resistance Band Lateral Raise", "Shoulders", "Band", compound = false),
+
+        // Additional home and gym variations (mirrored on server and Android).
+        Exercise("Incline Push-Up", "Chest", "Bodyweight", compound = true),
+        Exercise("Dumbbell Floor Press", "Chest", "Dumbbell", compound = true),
+        Exercise("Chest-Supported Dumbbell Row", "Back", "Dumbbell", compound = true),
+        Exercise("Assisted Pull-Up", "Back", "Machine", compound = true),
+        Exercise("Inverted Row", "Back", "Bodyweight", compound = true),
+        Exercise("Pike Push-Up", "Shoulders", "Bodyweight", compound = true),
+        Exercise("Dumbbell Shrug", "Shoulders", "Dumbbell"),
+        Exercise("Bodyweight Squat", "Quads", "Bodyweight", compound = true),
+        Exercise("Reverse Lunge (Bodyweight)", "Quads", "Bodyweight", compound = true),
+        Exercise("Split Squat (Bodyweight)", "Quads", "Bodyweight", compound = true),
+        Exercise("Reverse Lunge (Dumbbell)", "Quads", "Dumbbell", compound = true),
+        Exercise("Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", compound = true),
+        Exercise("Single-Leg Romanian Deadlift (Dumbbell)", "Hamstrings", "Dumbbell", compound = true),
+        Exercise("Glute Bridge (Bodyweight)", "Glutes", "Bodyweight", compound = true),
+        Exercise("Single-Leg Glute Bridge", "Glutes", "Bodyweight", compound = true),
+        Exercise("Hip Thrust (Dumbbell)", "Glutes", "Dumbbell", compound = true),
+        Exercise("Standing Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+        Exercise("Single-Leg Calf Raise (Bodyweight)", "Calves", "Bodyweight"),
+        Exercise("Standing Calf Raise (Dumbbell)", "Calves", "Dumbbell"),
+        Exercise("Side Plank", "Core", "Bodyweight"),
+        Exercise("Dead Bug", "Core", "Bodyweight"),
+        Exercise("Bird Dog", "Core", "Bodyweight"),
+        Exercise("Pallof Press", "Core", "Cable"),
+        Exercise("Reverse Crunch", "Core", "Bodyweight"),
+        Exercise("Kettlebell Goblet Squat", "Quads", "Kettlebell", compound = true),
+        Exercise("Kettlebell Deadlift", "Hamstrings", "Kettlebell", compound = true),
         // ---- Chest ----
         Exercise("Barbell Bench Press", "Chest", "Barbell", compound = true),
         Exercise("Incline Barbell Bench Press", "Chest", "Barbell", compound = true),
@@ -127,7 +163,7 @@ object ExerciseCatalog {
     )
 
     val categories: List<String> = listOf(
-        "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Cardio",
+        "Barbell", "Dumbbell", "Machine", "Cable", "Bodyweight", "Kettlebell", "Band", "Cardio",
     )
 
     private val byName = all.associateBy { it.name }

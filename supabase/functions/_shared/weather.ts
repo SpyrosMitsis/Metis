@@ -2,6 +2,7 @@
 // sessions weather-aware (heat/humidity pace adjustment, storm → indoor swap).
 
 export interface WeatherSnapshot {
+  localDate?: string;
   tempC: number;
   apparentC: number;
   humidity: number;
@@ -18,12 +19,16 @@ export async function getWeather(lat: number, lon: number): Promise<WeatherSnaps
     `&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m` +
     `&daily=temperature_2m_max,precipitation_probability_max&forecast_days=1&timezone=auto`;
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
     if (!res.ok) return null;
     const d = await res.json();
     const c = d.current ?? {};
     const daily = d.daily ?? {};
+    const required = [c.temperature_2m, c.apparent_temperature, c.relative_humidity_2m, c.wind_speed_10m,
+      c.precipitation, daily.precipitation_probability_max?.[0], daily.temperature_2m_max?.[0]];
+    if (!required.every(v => typeof v === "number" && Number.isFinite(v))) return null;
     const snap: WeatherSnapshot = {
+      localDate: typeof c.time === "string" ? c.time.slice(0, 10) : undefined,
       tempC: c.temperature_2m ?? 0,
       apparentC: c.apparent_temperature ?? c.temperature_2m ?? 0,
       humidity: c.relative_humidity_2m ?? 0,
@@ -97,4 +102,33 @@ export function assessViability(w: WeatherSnapshot, sport: "run" | "ride"): Viab
   if (blocked.length) return { tier: "blocked", reasons: blocked };
   if (caution.length) return { tier: "caution", reasons: caution };
   return { tier: "ok", reasons: [] };
+}
+
+const forecastCache = new Map<string, { at: number; value: WeatherSnapshot | null }>();
+/** Daily forecast extrema, not an observation at the planned start time. The
+ * source date is retained so another day's weather cannot authorize a session. */
+export async function getForecastWeather(lat: number, lon: number, date: string): Promise<WeatherSnapshot | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const key = `${lat}:${lon}:${date}`;
+  const cached = forecastCache.get(key);
+  if (cached && Date.now() - cached.at < 300000) return cached.value;
+  let value: WeatherSnapshot | null = null;
+  try {
+    const fields = "temperature_2m_max,apparent_temperature_max,apparent_temperature_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max";
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=${fields}&hourly=relative_humidity_2m&start_date=${date}&end_date=${date}&timezone=auto`, { signal: AbortSignal.timeout(7000) });
+    if (res.ok) {
+      const payload = await res.json();
+      const d = payload.daily;
+      const humidity = (payload.hourly?.relative_humidity_2m ?? []).filter((n: unknown) => typeof n === "number" && Number.isFinite(n));
+      const numbers = fields.split(",").map(k => d?.[k]?.[0]);
+      if (d?.time?.[0] === date && humidity.length && numbers.every(n => typeof n === "number" && Number.isFinite(n))) value = {
+        localDate: date, tempC: numbers[0], apparentC: numbers[2] <= -10 ? numbers[2] : numbers[1],
+        humidity: Math.max(...humidity), precipMm: numbers[3], precipProbMax: numbers[4], windKmh: numbers[5], tMaxC: numbers[0],
+        summary: "Daily forecast extrema, including forecast humidity; session-time conditions are not observations. Recheck near departure.",
+      };
+    }
+  } catch { /* Unknown forecast does not become fabricated fair weather. */ }
+  if (forecastCache.size > 50) forecastCache.clear();
+  forecastCache.set(key, { at: Date.now(), value });
+  return value;
 }
