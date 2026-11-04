@@ -32,7 +32,11 @@ export function reviewGeneratedWorkout(w: Workout, context: ReviewContext) {
 export function finalizeGeneratedWorkout(w: Workout, context: ReviewContext): Workout {
   let candidate = w;
   for (let pass = 0; pass < 4; pass++) {
-    const corrected = reviewGeneratedWorkout(candidate, context).corrected;
+    const review = reviewGeneratedWorkout(candidate, context);
+    if (review.issues.length || review.unsafe.length) {
+      throw new PlanError("Generated session needs repair", 422, "CONTENT_CONSTRAINT", { issues: review.issues, unsafe: review.unsafe });
+    }
+    const corrected = review.corrected;
     if (stableValue(corrected) === stableValue(candidate)) {
       assertPublishable(corrected, context);
       return corrected;

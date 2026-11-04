@@ -1,3 +1,4 @@
+import { constrainSession } from "../_shared/review_context.ts";
 import type { TrainingSport } from "../../../shared/prescription.ts";
 import { sessionProposalLimits } from "../_shared/session_engine.ts";
 import { logger } from "../_shared/log.ts";
@@ -456,7 +457,7 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       // authority the sports list above deliberately does not try to have.
       backoffs: activeBackoffs(profile.injury_backoff, date),
     };
-    const athleteState = await withForecast(await sessionState(admin, userId, onboarding, date, session.type), profile);
+    const athleteState = constrainSession(await withForecast(await sessionState(admin, userId, onboarding, date, session.type), profile), reviewContext);
     athleteStates.push(athleteState);
     session = await compileWithRepairs(session,athleteState,async(previous,error)=> {
       const prompt=sessionRepairPrompt(previous,athleteState,error);
