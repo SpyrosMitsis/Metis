@@ -343,6 +343,7 @@ export function deepseekBodyExtras(
   provider: LlmProvider,
   model: string,
 ): Record<string, unknown> {
+  if (provider === "openrouter" && /^deepseek\/deepseek-v4/.test(model)) return { reasoning: { enabled: false } };
   return provider === "deepseek" && /^deepseek-v4/.test(model)
     ? { thinking: { type: "disabled" } }
     : {};
@@ -396,6 +397,7 @@ async function openAiCompatible(
   }
   const data = await res.json();
   const text: string = data.choices?.[0]?.message?.content ?? "";
+  if (!text.trim()) throw new Error(`${provider} returned empty content (finish_reason=${data.choices?.[0]?.finish_reason ?? "unknown"})`);
   return {
     text,
     promptTokens: data.usage?.prompt_tokens ?? estTokens(promptText(args)),

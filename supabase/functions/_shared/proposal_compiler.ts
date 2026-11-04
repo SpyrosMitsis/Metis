@@ -81,7 +81,7 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
         if (!meta.implements.every(i => state.implements.includes(i))) throw new ProposalError(`Unavailable implements for ${e.name}`);
         const doseText = e.reps.toLowerCase().replace(/(?:\/\s*side|each side|per side)/g, "").trim();
         const reps = /^(\d+)(?:\s*[-–]\s*(\d+))?$/.exec(doseText);
-        const hold = /^(\d+)\s*(?:s|sec|seconds?)$/.exec(doseText);
+        const hold = /^(\d+)(?:\s*[-–]\s*\d+)?\s*(?:s|sec|seconds?)$/.exec(doseText);
         const carry = /^(\d+)\s*(?:m|metres?|meters?)$/.exec(doseText);
         const amrap = /amrap/i.test(e.reps) && e.dose?.work_seconds;
         if (!reps && !hold && !carry && !amrap) throw new ProposalError(`Explicit repetitions, hold seconds or carry distance required for ${e.name}`);
