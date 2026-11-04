@@ -149,7 +149,7 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
     if (b.kind === "strength") {
       const entry = EXERCISE_CATALOG.find(e => exerciseId(e.name) === b.exercise_id && e.name === b.name);
       if (!entry || !requirements(entry).implements.every(i => state.implements.includes(i))) throw new ProposalError("Unavailable or unknown strength exercise");
-      if (state.excluded_exercises?.includes(b.exercise_id)) throw new ProposalError("Exercise is contraindicated by an active injury");
+      if (state.excluded_exercises?.includes(b.exercise_id)) throw new ProposalError(`${b.name} (${b.exercise_id}) is excluded by an active movement restriction. Remove it or replace it with an exercise from allowed_strength_exercises; do not preserve this movement in the repair.`);
       const meta = requirements(entry); b.load_mode = meta.load_mode; b.sides = meta.unilateral ? 2 : 1;
       const last = state.last_loads?.[b.exercise_id];
       b.weight_kg = ["band", "bodyweight"].includes(b.load_mode) || b.role === "warmup" || !last ? null : boundedLoad(b.load_mode, b.weight_kg, last.weight_kg);
