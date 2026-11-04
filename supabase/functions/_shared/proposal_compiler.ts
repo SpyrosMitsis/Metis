@@ -19,7 +19,7 @@ export function sessionRepairPrompt(previous: Workout, state: SessionState, erro
 Athlete constraints: ${JSON.stringify(limits)}.
 Previous session: ${JSON.stringify(previous)}.
 Compiler error: ${error}.
-For strength, copy EVERY exercise name exactly from allowed_strength_exercises, including warm-up, activation and cool-down exercises. Replace unsupported movements with an appropriate allowed exercise or omit unsupported accessories; do not preserve an invalid movement just because it appeared in the previous session. Respect excluded_exercises and available equipment. Use explicit repetitions, hold seconds or carry metres, and include all sets, rests and transitions.
+For strength, copy EVERY exercise name exactly from allowed_strength_exercises, including warm-up, activation and cool-down exercises. Replace unsupported movements with an appropriate allowed exercise or omit unsupported accessories; do not preserve an invalid movement just because it appeared in the previous session. Respect excluded_exercises and available equipment. Use explicit repetitions, hold seconds or carry metres, and include all sets, rests and transitions. For endurance, reps must contain ONLY a duration such as "90 sec" or "5 min". Put recovery in rest_seconds; never combine work and recovery prose in reps.
 Preserve valid primary movements and appropriate loads. Trim accessories or excess preparation/rest if necessary. Aim below ${Math.floor(limits.complete_session_minutes_max * 0.85)} minutes, counting the complete session. Return corrected workout JSON only.`;
 }
 const effort = (value: number) => ({ kind: "rpe" as const, min: Math.max(1, Math.min(10, value)), max: Math.max(1, Math.min(10, value)) });
@@ -67,7 +67,15 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
     blocks.push(...p.blocks.map(b => b.kind === "endurance" ? { ...b, numeric_target: undefined } : b));
   } else for (const section of w.sections) {
     const phase = role(section.name);
-    for (const e of section.exercises) {
+    for (const original of section.exercises) {
+      let e = original;
+      const runWalk = w.type === "run" && /^(\d+)\s*(s|sec|seconds?|min|minutes?)\s+run\s*\/\s*(\d+)\s*(s|sec|seconds?|min|minutes?)\s+walk$/i.exec(e.reps.trim());
+      if (runWalk && !e.dose?.work_seconds) {
+        const seconds = Number(runWalk[1]) * (/^min/i.test(runWalk[2]) ? 60 : 1);
+        const recovery = Number(runWalk[3]) * (/^min/i.test(runWalk[4]) ? 60 : 1);
+        if (e.rest_seconds != null && e.rest_seconds !== recovery) throw new ProposalError("Run-walk recovery conflicts with rest_seconds");
+        e = { ...e, reps: `${seconds} sec`, rest_seconds: recovery, dose: { ...e.dose, work_seconds: seconds, recovery_after_last: true } };
+      }
       if (!Number.isInteger(e.sets) || e.sets < 1 || e.sets > 100) throw new ProposalError("Repetitions/sets must be positive whole numbers");
       if (w.type === "rest") {
         const duration = work(e).seconds;

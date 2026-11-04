@@ -100,9 +100,21 @@ Deno.test("final validation failures participate in bounded proposal repair", as
 Deno.test("timed unilateral doses accept explicit per-side units without model repair", async () => {
   const valid = structuredClone(proposed);
   valid.sections = [{ ...valid.sections[1], exercises: [{ ...valid.sections[1].exercises[0], name: "Side Plank", reps: "20-30 s per side", sets: 1 }] }];
-  const result = await compileWithRepairs(valid, state, async () => { throw new Error("Unexpected repair"); });
+  const result = await compileWithRepairs(valid, state, async (_previous, error) => { throw new Error(error); });
   assertPrescriptionProjection(result);
   const block = result.prescription!.blocks[0];
   assert(block.kind === "strength");
   assertEquals(block.hold_seconds, 20);
+});
+
+Deno.test("explicit run-walk work and recovery compile without losing walking time", async () => {
+  const w: Workout = { ...proposed, type: "run", title: "Easy Run-Walk", sections: [{ name: "Main", duration_minutes: 18,
+    exercises: [{ ...proposed.sections[1].exercises[0], name: "Run-walk intervals", sets: 3, reps: "90s run / 90s walk", rest_seconds: 90, pace_zone: "Z2" }] }] };
+  const result = await compileWithRepairs(w, { ...state, sport: "run", weekly_remaining_minutes: 30 }, async (_previous, error) => { throw new Error(error); });
+  const block = result.prescription!.blocks.find(b => b.kind === "endurance" && b.repetitions === 3);
+  assert(block?.kind === "endurance");
+  assertEquals(block.work_seconds, 90);
+  assertEquals(block.recovery_seconds, 90);
+  assertEquals(block.recovery_after_last, true);
+  assertPrescriptionProjection(result);
 });
