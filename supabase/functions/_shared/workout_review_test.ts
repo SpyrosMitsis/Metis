@@ -591,3 +591,17 @@ Deno.test("no backoffs means byte-identical behavior to before", () => {
   assertEquals(empty.violations, without.violations);
   assertEquals(empty.corrected, without.corrected);
 });
+
+Deno.test("an already easy run satisfies an ease backoff without endless repair", () => {
+  const w = validateWorkout({ type: "run", title: "Easy run", duration_minutes: 26, rpe_target: 3,
+    coach_note: "", sections: [{ name: "Main", duration_minutes: 26,
+      exercises: [{ name: "Easy running", sets: 1, reps: "26 min", pace_zone: "Z2" }] }] }).workout!;
+  const ctx = { ...EMPTY_CTX, backoffs: [backoff("Lower back", "ease")] };
+  const first = reviewWorkout(w, ctx);
+  assertEquals(first.issues.filter(i => i.code === "EASE_INTENSITY"), []);
+  assertEquals(reviewWorkout(first.corrected, ctx).issues.filter(i => i.code === "EASE_INTENSITY"), []);
+  const hard = structuredClone(w);
+  hard.rpe_target = 8;
+  hard.sections[0].exercises[0].pace_zone = "Z4";
+  assert(reviewWorkout(hard, ctx).issues.some(i => i.code === "EASE_INTENSITY"));
+});

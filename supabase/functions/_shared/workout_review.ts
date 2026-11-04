@@ -346,7 +346,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     const EASE_RPE_CAP = 6;
     for (const b of ease) {
       const sportHit = isEndurance(corrected.type) && sportsForArea(b.area).includes(corrected.type);
-      if (sportHit) {
+      if (sportHit && (isHardSession(corrected) || corrected.rpe_target > EASE_RPE_CAP)) {
         for (const sec of corrected.sections) {
           for (const ex of sec.exercises) {
             if (!zoneIsHard(zoneOf(ex))) continue;

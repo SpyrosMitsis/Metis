@@ -176,7 +176,8 @@ export async function compileWithRepairs(proposed: Workout, state: SessionState,
     }
     catch(error) {
       if(attempt>=2) throw error;
-      proposed=await repair(proposed,error instanceof Error ? error.message : String(error));
+      const details = error && typeof error === "object" && "details" in error ? JSON.stringify(error.details) : "";
+      proposed=await repair(proposed,`${error instanceof Error ? error.message : String(error)}${details ? ` Details: ${details}` : ""}`);
     }
   }
 }
