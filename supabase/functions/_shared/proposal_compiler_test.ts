@@ -99,7 +99,7 @@ Deno.test("final validation failures participate in bounded proposal repair", as
 
 Deno.test("timed unilateral doses accept explicit per-side units without model repair", async () => {
   const valid = structuredClone(proposed);
-  valid.sections = [{ ...valid.sections[1], exercises: [{ ...valid.sections[1].exercises[0], name: "Side Plank", reps: "20-30 s per side", sets: 1 }] }];
+  valid.sections = [{ ...valid.sections[1], exercises: [{ ...valid.sections[1].exercises[0], name: "Side Plank", reps: "20-30 sec hold per side", sets: 1 }] }];
   const result = await compileWithRepairs(valid, state, async (_previous, error) => { throw new Error(error); });
   assertPrescriptionProjection(result);
   const block = result.prescription!.blocks[0];

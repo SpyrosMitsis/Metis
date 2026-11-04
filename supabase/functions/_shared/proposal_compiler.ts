@@ -87,7 +87,7 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
         if (!entry) throw new ProposalError(`Exercise is not in the bundled catalog: ${e.name}`);
         const meta = requirements(entry);
         if (!meta.implements.every(i => state.implements.includes(i))) throw new ProposalError(`Unavailable implements for ${e.name}`);
-        const doseText = e.reps.toLowerCase().replace(/(?:\/\s*side|each side|per side)/g, "").trim();
+        const doseText = e.reps.toLowerCase().replace(/(?:\/\s*side|each side|per side)/g, "").replace(/\b(?:hold|reps?|repetitions?)\b/g, "").trim();
         const reps = /^(\d+)(?:\s*[-–]\s*(\d+))?$/.exec(doseText);
         const hold = /^(\d+)(?:\s*[-–]\s*\d+)?\s*(?:s|sec|seconds?)$/.exec(doseText);
         const carry = /^(\d+)\s*(?:m|metres?|meters?)$/.exec(doseText);
