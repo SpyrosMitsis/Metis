@@ -18,7 +18,7 @@ import { requirements } from "./exercise_requirements.ts";
 
 import type { InjuryBackoff, InjuryEntry, Workout, WorkoutExercise } from "./types.ts";
 import { allowedCategories, categoryOfExercise, enforceStrengthCatalog, EXERCISE_CATALOG } from "./exercise_catalog.ts";
-import { exerciseLoadsArea, sportsForArea } from "./injury.ts";
+import { exerciseLoadsArea, sportsForArea, backoffSports } from "./injury.ts";
 import type { NextTarget } from "./progression.ts";
 
 export interface MainLift {
@@ -323,7 +323,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     const ease = backoffs.filter((b) => b.level === "ease");
 
     for (const b of avoid) {
-      if (isEndurance(corrected.type) && sportsForArea(b.area).includes(corrected.type)) {
+      if (isEndurance(corrected.type) && backoffSports(b).includes(corrected.type)) {
         const msg = `${corrected.type} loads the ${b.area}, which is on an avoid backoff until ${b.until}`;
         issue("AVOID_SPORT", msg);
         unsafe.push(msg);
@@ -345,7 +345,7 @@ export function reviewWorkout(w: Workout, ctx: ReviewContext): ReviewResult {
     // is training, just not driving into a sore area.
     const EASE_RPE_CAP = 6;
     for (const b of ease) {
-      const sportHit = isEndurance(corrected.type) && sportsForArea(b.area).includes(corrected.type);
+      const sportHit = isEndurance(corrected.type) && backoffSports(b).includes(corrected.type);
       if (sportHit && (isHardSession(corrected) || corrected.rpe_target > EASE_RPE_CAP)) {
         for (const sec of corrected.sections) {
           for (const ex of sec.exercises) {

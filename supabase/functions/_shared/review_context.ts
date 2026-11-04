@@ -1,7 +1,7 @@
 import { startingLiftReferences } from "./strength_evidence.ts";
 import { EXERCISE_CATALOG } from "./exercise_catalog.ts";
 import { exerciseId } from "./exercise_requirements.ts";
-import { exerciseLoadsArea, sportsForArea } from "./injury.ts";
+import { exerciseLoadsArea, sportsForArea, backoffSports } from "./injury.ts";
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { maxWeeklySets } from "./workout_review.ts";
 import type { ReviewContext, MainLift } from "./workout_review.ts";
@@ -59,8 +59,8 @@ export async function loadReviewContext(admin: SupabaseClient, owner: string, da
 export function constrainSession(state: import('./session_engine.ts').SessionState, context: ReviewContext): import('./session_engine.ts').SessionState {
   const avoided = (context.backoffs ?? []).filter(b => b.level === "avoid");
   const excluded = EXERCISE_CATALOG.filter(e => avoided.some(b => exerciseLoadsArea(b.area, e.name, e.muscle))).map(e => exerciseId(e.name));
-  const blocked = avoided.some(b => sportsForArea(b.area).includes(state.sport as import('./injury.ts').EnduranceSport));
-  const eased = (context.backoffs ?? []).some(b => b.level === "ease" && sportsForArea(b.area).includes(state.sport as import('./injury.ts').EnduranceSport));
+  const blocked = avoided.some(b => backoffSports(b).includes(state.sport as import('./injury.ts').EnduranceSport));
+  const eased = (context.backoffs ?? []).some(b => b.level === "ease" && backoffSports(b).includes(state.sport as import('./injury.ts').EnduranceSport));
   return { ...state, max_minutes: Math.min(state.max_minutes, context.maxMinutes ?? state.max_minutes),
     excluded_exercises: [...new Set([...(state.excluded_exercises ?? []), ...excluded])],
     remaining_sets: Object.fromEntries([...new Set(EXERCISE_CATALOG.map(e=>e.muscle))].map(m=>[m,Math.max(0,maxWeeklySets(context.experience)-(context.weeklySetsByMuscle[m] ?? 0))])),

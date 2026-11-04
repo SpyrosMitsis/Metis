@@ -110,6 +110,8 @@ export interface InjuryEntry {
 
 // Active per-area backoff, self-expiring against the client's local date.
 export interface InjuryBackoff {
+  /** Explicit affected sports; [] means movement restrictions only. Missing is legacy. */
+  sports?: ("run" | "ride" | "swim")[];
   area: string;
   level: "ease" | "avoid";
   until: string; // YYYY-MM-DD, inclusive

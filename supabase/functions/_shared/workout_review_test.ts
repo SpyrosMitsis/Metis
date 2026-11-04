@@ -605,3 +605,12 @@ Deno.test("an already easy run satisfies an ease backoff without endless repair"
   hard.sections[0].exercises[0].pace_zone = "Z4";
   assert(reviewWorkout(hard, ctx).issues.some(i => i.code === "EASE_INTENSITY"));
 });
+
+Deno.test("explicit cycling restriction preserves running despite lower-back avoidance", () => {
+  const w = validateWorkout({ type: "run", title: "Easy run", duration_minutes: 26, rpe_target: 3,
+    coach_note: "", sections: [{ name: "Main", duration_minutes: 26,
+      exercises: [{ name: "Easy running", sets: 1, reps: "26 min", pace_zone: "Z2" }] }] }).workout!;
+  const ctx = { ...EMPTY_CTX, backoffs: [{ ...backoff("Lower back", "avoid"), sports: ["ride" as const] }] };
+  assertEquals(reviewWorkout(w, ctx).unsafe, []);
+  assert(reviewWorkout({ ...w, type: "ride" }, ctx).unsafe.length > 0);
+});

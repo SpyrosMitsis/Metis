@@ -297,15 +297,16 @@ export const TOOL_CATALOG: ToolDef[] = [
   },
   {
     name: "set_injury_backoff", kind: "act",
-    args: "{ area: string, level: 'ease'|'avoid', days?: number, reason?: string }",
+    args: "{ area: string, level: 'ease'|'avoid', sports?: string[], days?: number, reason?: string }",
     schema: {
       type: "object",
       properties: {
         area: { type: "string", description: "Body area, e.g. 'Knee', 'Lower back', 'Achilles'. Match an existing injury area when there is one." },
+        sports: { type: "array", items: { type: "string", enum: ["run", "ride", "swim"] }, description: "Only sports the athlete explicitly reports as painful or restricted. Use [] for movement-only restrictions. Never infer from body area; preserve reported pain-free activities." },
         level: {
           type: "string",
           enum: ["ease", "avoid"],
-          description: "ease = keep training it but cap the intensity; avoid = do not load it at all (also stops the sports that stress it being scheduled)",
+          description: "ease = keep training it but cap the intensity; avoid = avoid loading movements; only explicitly listed sports are blocked",
         },
         days: { type: "number", description: "How long, in days from today. Defaults to 7. Capped at 60." },
         reason: { type: "string", description: "Why, e.g. 'sharp pain on Tuesday's run'" },
@@ -313,7 +314,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       required: ["area", "level"],
     },
     description:
-      "Back off an injured area for a set number of days. This is what actually changes the workouts: it strips the movements that load that area out of generated sessions and, at 'avoid', stops the affected sports being scheduled. Use whenever the athlete reports pain in an area, do NOT rely on remember alone for this.",
+      "Back off an injured area for a set number of days. This is what actually changes the workouts: it strips the movements that load that area out of generated sessions and, at 'avoid', stops only explicitly listed sports. Ask which activities provoke symptoms; do not infer sport restrictions from anatomy. Use whenever the athlete reports pain in an area, do NOT rely on remember alone for this.",
   },
   {
     name: "clear_injury_backoff", kind: "act", args: "{ area?: string }",
@@ -948,6 +949,7 @@ export async function executeTool(
           .select("injury_backoff").eq("id", userId).single();
         const next = upsertBackoff(activeBackoffs(p?.injury_backoff, today), {
           area, level, until: addDays(today, days), reason, set_at: today,
+          sports: Array.isArray(args.sports) ? args.sports.filter((s): s is "run" | "ride" | "swim" => ["run", "ride", "swim"].includes(String(s))) : [],
         });
         await admin.from("user_profiles").update({ injury_backoff: next }).eq("id", userId);
         return JSON.stringify({
@@ -955,7 +957,7 @@ export async function executeTool(
           // Named back so the coach can say what it actually did rather than
           // promising a vaguer version of it.
           effect: level === "avoid"
-            ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
+            ? "movements loading this area are removed from generated sessions, and only the explicitly listed sports will not be scheduled"
             : "the area is still trained, but hard zones and heavy loading through it are capped",
         });
       }
@@ -1005,6 +1007,7 @@ export async function executeTool(
         const level = severity === "serious" ? "avoid" : "ease";
         const backoffs = upsertBackoff(activeBackoffs(p?.injury_backoff, today), {
           area: entry.area,
+          sports: [],
           level,
           until: addDays(today, days),
           reason: detail || undefined,
@@ -1022,7 +1025,7 @@ export async function executeTool(
           until: addDays(today, days),
           next_questions: ["exact location / side", "pain 1-10", "what triggers it and when it began"],
           effect: level === "avoid"
-            ? "movements loading this area are removed from generated sessions, and the sports that stress it will not be scheduled"
+            ? "movements loading this area are removed from generated sessions, and only the explicitly listed sports will not be scheduled"
             : "hard zones and heavy loading through this area are capped while you clarify the injury",
         });
       }

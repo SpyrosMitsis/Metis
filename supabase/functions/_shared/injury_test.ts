@@ -417,7 +417,7 @@ Deno.test("backoffBlock: states the area, the date and the instruction", () => {
   ]);
   assert(block.includes("Knee"));
   assert(block.includes("2026-08-08"));
-  assert(block.includes("DO NOT load this area"));
+  assert(block.includes("Avoid movements loading this area"));
   assert(block.includes("pain 4 of 5 after a run"));
 });
 
@@ -449,7 +449,7 @@ Deno.test("the whole loop: raise, ask, hurt, back off, recover, clear", () => {
 
   // 4. That is now a hard constraint on generation, with an end date.
   assertEquals(activeBackoffs(backoffs, "2026-08-06").length, 1);
-  assertEquals([...sportsToAvoid(activeBackoffs(backoffs, "2026-08-06"))].sort(), ["ride", "run"]);
+  assertEquals([...sportsToAvoid(activeBackoffs(backoffs, "2026-08-06"))], []); // Squat pain is not evidence that running or cycling hurts.
   assert(backoffBlock(activeBackoffs(backoffs, "2026-08-06")).includes("Knee"));
 
   // 5. It expires by itself a week later. Nothing had to delete it.
@@ -474,4 +474,12 @@ Deno.test("painCheckArea uses the review engine's own muscle lookup", () => {
   };
   assertEquals(muscleOf(ex), "Quads");
   assert(exerciseLoadsArea("Knee", ex.name, muscleOf(ex)));
+});
+
+Deno.test("explicit movement-only backoff does not ban pain-free sports", () => {
+  const b = { area: "Lower back", level: "avoid" as const, until: "2026-11-07", sports: [] };
+  assertEquals([...sportsToAvoid([b])], []);
+  assert(exerciseLoadsArea(b.area, "Barbell Deadlift", "Back"));
+  assertEquals([...sportsToAvoid([{ ...b, sports: ["ride"] }])], ["ride"]);
+  assert(backoffBlock([b]).includes("Restricted sports: none"));
 });

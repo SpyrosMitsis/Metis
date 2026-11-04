@@ -41,6 +41,8 @@ export type InjuryStatus = "" | "present" | "better" | "resolved";
 // prose in coach_knowledge cannot override a concrete prescription, this can.
 // Inclusive `until`, self-expiring against the client's local date.
 export interface InjuryBackoff {
+  /** Explicit affected sports; [] means movement restrictions only. Missing is legacy. */
+  sports?: ("run" | "ride" | "swim")[];
   area: string;
   level: "ease" | "avoid";
   until: string; // YYYY-MM-DD, inclusive

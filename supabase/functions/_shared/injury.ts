@@ -259,11 +259,15 @@ export function sportsForArea(area: string): EnduranceSport[] {
  * computeDayList's pause handling, applied to the sports list rather than the
  * day list.
  */
+export function backoffSports(b: InjuryBackoff): EnduranceSport[] {
+  return Array.isArray(b.sports) ? b.sports.filter(s => ["run", "ride", "swim"].includes(s)) : sportsForArea(b.area);
+}
+
 export function sportsToAvoid(backoffs: InjuryBackoff[]): Set<EnduranceSport> {
   const out = new Set<EnduranceSport>();
   for (const b of backoffs) {
     if (b.level !== "avoid") continue;
-    for (const s of sportsForArea(b.area)) out.add(s);
+    for (const s of backoffSports(b)) out.add(s);
   }
   return out;
 }
@@ -416,6 +420,7 @@ export function backoffFromPain(
   return {
     backoff: {
       area: area.trim(),
+      sports: [],
       level,
       until: addDays(today, severe ? BACKOFF_DAYS_SEVERE : BACKOFF_DAYS),
       reason: (reason ?? `pain ${p} of 5 reported after a session`).slice(0, 200),
@@ -437,8 +442,8 @@ export function backoffBlock(backoffs: InjuryBackoff[]): string {
   if (!backoffs.length) return "";
   const lines = backoffs.map((b) => {
     const how = b.level === "avoid"
-      ? "DO NOT load this area at all: substitute movements that leave it out, and do not schedule sports that stress it"
-      : "EASE OFF this area: no Z4/Z5 or heavy loading through it, keep the volume conservative";
+      ? `Avoid movements loading this area. Restricted sports: ${backoffSports(b).join(", ") || "none"}. Do not infer additional sport bans from the body-area label`
+      : `EASE OFF loading this area. Sports requiring reduced intensity: ${backoffSports(b).join(", ") || "none"}. Do not infer additional sport restrictions`;
     const why = b.reason ? ` Reported: ${b.reason}.` : "";
     return `- ${b.area} (until ${b.until}, inclusive). ${how}.${why}`;
   });
