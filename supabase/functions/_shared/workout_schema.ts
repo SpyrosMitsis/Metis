@@ -158,7 +158,7 @@ const WeekPlanSchema = z
       }),
   }));
 
-export function validateWeekPlan(obj: unknown): { ok: boolean; plan?: WeekPlan; error?: string } {
+export function validateWeekPlan(obj: unknown, window?: { dates: string[]; protectedDates?: ReadonlySet<string> }): { ok: boolean; plan?: WeekPlan; error?: string } {
   const r = WeekPlanSchema.safeParse(obj);
   if (!r.success) {
     const error = r.error.issues
@@ -167,5 +167,11 @@ export function validateWeekPlan(obj: unknown): { ok: boolean; plan?: WeekPlan; 
     return { ok: false, error };
   }
   if (r.data.days.length === 0) return { ok: false, error: "no valid days" };
+  if (window) {
+    const present = new Set(r.data.days.map(d => d.date));
+    const missing = window.dates.filter(d => !window.protectedDates?.has(d) && !present.has(d));
+    const extra = [...present].filter(d => !window.dates.includes(d));
+    if (missing.length || extra.length) return { ok: false, error: `Week dates mismatch: missing [${missing.join(", ")}]; outside requested window [${extra.join(", ")}]` };
+  }
   return { ok: true, plan: r.data };
 }

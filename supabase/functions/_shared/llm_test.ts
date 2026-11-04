@@ -32,7 +32,7 @@ Deno.test("the thinking flag is deepseek-only and v4-only", () => {
   // Sending an unknown body key to another vendor's endpoint can 400.
   assertEquals(deepseekBodyExtras("openai", "gpt-5-mini"), {});
   assertEquals(deepseekBodyExtras("groq", "llama-3.3-70b-versatile"), {});
-  assertEquals(deepseekBodyExtras("openrouter", "deepseek/deepseek-v4-flash"), {});
+  assertEquals(deepseekBodyExtras("openrouter", "deepseek/deepseek-v4-flash"), { reasoning: { enabled: false } });
   // A user override back to a pre-V4 id must not carry the V4-only field.
   assertEquals(deepseekBodyExtras("deepseek", "deepseek-chat"), {});
 });

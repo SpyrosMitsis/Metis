@@ -139,7 +139,7 @@ Deno.test("injury exclusions are applied before strength dose construction and c
   const state=await sessionState(db,"owner",profile.onboarding,"2026-10-27","strength");
   const unsafe=buildSession({...state,excluded_exercises:[]},"strength");
   assert(unsafe.sections.some(s=>s.exercises.some(e=>/deadlift/i.test(e.name))));
-  assertThrows(()=>compileProposal(unsafe,state),Error,"contraindicated");
+  assertThrows(()=>compileProposal(unsafe,state),Error,"excluded by an active movement restriction");
   const safe=buildSession(state,"strength");
   assert(!safe.sections.some(s=>s.exercises.some(e=>/deadlift/i.test(e.name))));
   const context=await loadReviewContext(db,"owner",state.date,"strength",profile);

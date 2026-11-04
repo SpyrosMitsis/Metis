@@ -118,3 +118,32 @@ Deno.test("explicit run-walk work and recovery compile without losing walking ti
   assertEquals(block.recovery_after_last, true);
   assertPrescriptionProjection(result);
 });
+
+Deno.test("malformed repair consumes one attempt and can recover on the remaining attempt", async () => {
+  let calls = 0;
+  const valid = structuredClone(proposed);
+  valid.sections = [valid.sections[1]];
+  const result = await compileWithRepairs(proposed, state, async (_previous, error) => {
+    calls++;
+    if (calls === 1) throw new SyntaxError("Truncated repair JSON");
+    assertStringIncludes(error, "Truncated repair JSON");
+    return valid;
+  });
+  assertEquals(calls, 2);
+  assertPrescriptionProjection(result);
+});
+
+Deno.test("invalid repairs remain bounded and infrastructure failures are not retried", async () => {
+  let calls = 0;
+  await assertRejects(() => compileWithRepairs(proposed, state, async () => {
+    calls++;
+    throw new SyntaxError("invalid JSON");
+  }), SyntaxError);
+  assertEquals(calls, 2);
+  calls = 0;
+  await assertRejects(() => compileWithRepairs(proposed, state, async () => {
+    calls++;
+    throw new Error("provider unavailable");
+  }), Error, "provider unavailable");
+  assertEquals(calls, 1);
+});

@@ -1,3 +1,4 @@
+import { WeekBudget } from "../_shared/week_budget.ts";
 import { constrainSession } from "../_shared/review_context.ts";
 import type { TrainingSport } from "../../../shared/prescription.ts";
 import { sessionProposalLimits } from "../_shared/session_engine.ts";
@@ -6,7 +7,7 @@ import { overlapReason, demandingWorkout } from "../_shared/training_demands.ts"
 import { startingLiftReferences } from "../_shared/strength_evidence.ts";
 import { slotKey } from "../_shared/session_slots.ts";
 import { compileWithRepairs, sessionRepairPrompt } from "../_shared/proposal_compiler.ts";
-import { sessionState, withForecast } from "../_shared/session_context.ts";
+import { sessionState, withForecast, remainingWeekMinutes } from "../_shared/session_context.ts";
 import { SESSION_POLICY } from "../_shared/session_engine.ts";
 import { deterministicWeek } from "../_shared/deterministic_week.ts";
 import { dailyMinutes, explicitImplements } from "../_shared/session_context.ts";
@@ -322,7 +323,7 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
     await logFailure(chain[0] ?? null, null, msg);
     throw new Error(`AI generation failed: ${msg}`);
   }
-  let v = validateWeekPlan(safeJson(outcome.text));
+  let v = validateWeekPlan(safeJson(outcome.text), { dates, protectedDates: new Set(lockedByDate.keys()) });
   if (!v.ok) {
     const retry = await llmGenerateWithFallback(
       chain,
@@ -338,13 +339,13 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       resolveBaseUrl,
     ).catch(() => null);
     if (retry) {
-      const v2 = validateWeekPlan(safeJson(retry.text));
-      if (v2.ok) { v = v2; outcome = retry; }
+      const v2 = validateWeekPlan(safeJson(retry.text), { dates, protectedDates: new Set(lockedByDate.keys()) });
+      v = v2; outcome = retry;
     }
   }
   if (!v.ok || !v.plan) {
     await logFailure(outcome.provider, outcome.text, `could not parse week plan: ${v.error}`);
-    throw new Error(`could not parse week plan: ${v.error}`);
+    throw new PlanError(`could not parse week plan: ${v.error}`, 422, "INVALID_WEEK");
   }
   const plan = v.plan;
   const sessionsByDate = new Map(plan.days.map(day => [day.date, day.session]));
@@ -429,6 +430,8 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
   // Don't insert on dates that already hold a locked session.
   const athleteStates: Awaited<ReturnType<typeof sessionState>>[] = [];
   const rows: { user_id: string; date: string; type: string; workout_json: Workout; llm_provider: string; llm_model: string }[] = [];
+  const weeklyBudget = new WeekBudget();
+  const replacingDates = new Set(dates.filter(date => !lockedByDate.has(date)));
   for (let i = 0; i < dates.length; i++) {
     const date = dates[i];
     if (lockedByDate.has(date)) continue;
@@ -458,6 +461,9 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       backoffs: activeBackoffs(profile.injury_backoff, date),
     };
     const athleteState = constrainSession(await withForecast(await sessionState(admin, userId, onboarding, date, session.type), profile), reviewContext);
+    const available = await weeklyBudget.available(date, () =>
+      remainingWeekMinutes(admin, userId, onboarding, date, replacingDates, athleteState.actual));
+    athleteState.weekly_remaining_minutes = Math.min(athleteState.weekly_remaining_minutes, available);
     athleteStates.push(athleteState);
     session = await compileWithRepairs(session,athleteState,async(previous,error)=> {
       const prompt=sessionRepairPrompt(previous,athleteState,error);
@@ -466,10 +472,13 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       await logLlmResult(admin,userId,"plan",hosted,repair,profile,{systemPrompt:SYSTEM_PROMPT,userPrompt:prompt,rawResponse:repair.text,parsedOk:checked.ok,error:checked.ok?null:checked.error});
       if(!checked.ok||!checked.workout)throw new PlanError(checked.error??"Invalid session repair",422,"DOSE_INVALID");
       return checked.workout;
-    }, compiled => finalizeGeneratedWorkout(compiled, reviewContext));
-    const overlap = overlapReason(date, session.type, demandingWorkout(session), athleteState.actual,
-      [...(lockedRows ?? []).filter(r => !r.skipped).map(r => ({ date: r.date, workout: r.workout_json as Workout })), ...rows.map(r => ({ date: r.date, workout: r.workout_json }))]);
-    if (overlap) throw new PlanError(overlap, 422, "RECOVERY_CONFLICT");
+    }, compiled => {
+      const reviewed = finalizeGeneratedWorkout(compiled, reviewContext);
+      const overlap = overlapReason(date, reviewed.type, demandingWorkout(reviewed), athleteState.actual,
+        [...(lockedRows ?? []).filter(r => !r.skipped).map(r => ({ date: r.date, workout: r.workout_json as Workout })), ...rows.map(r => ({ date: r.date, workout: r.workout_json }))]);
+      if (overlap) throw new PlanError(overlap, 422, "RECOVERY_CONFLICT");
+      return reviewed;
+    });
     const rev = reviewGeneratedWorkout(session, reviewContext);
     session = rev.corrected;
     assertPublishable(session, reviewContext);
@@ -489,6 +498,7 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
     if (isHardSession(session)) lastHardDate = date;
 
     rows.push({ user_id: userId, date, type: session.type, workout_json: session, llm_provider: outcome.provider, llm_model: outcome.model });
+    weeklyBudget.consume(date, session.duration_minutes);
   }
   if (!rows.length) return { start_date: start, end_date: end, scheduled: 0, pushed: 0, days: [],
     week_focus: plan.week_focus, rationale: "All requested dates are protected." };
@@ -554,7 +564,7 @@ Deno.serve(async (req) => {
     const result = await planForUser(admin, userId, start, body.push ?? true, body.calendar_busy ?? null, requestId(body.request_id), localToday);
     return json(result);
   } catch (e) {
-    log.error("failed", { err: e instanceof Error ? e.message : String(e) });
+    log.error("failed", { err: e instanceof Error ? e.message : String(e), ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) });
     return json({ error: e instanceof Error ? e.message : String(e),
       ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) }, errorStatus(e));
   }

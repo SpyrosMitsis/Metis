@@ -172,22 +172,30 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
 export async function compileWithRepairs(proposed: Workout, state: SessionState,
   repair: (previous: Workout, error: string) => Promise<Workout>,
   finalize: (compiled: Workout) => Workout = compiled => compiled): Promise<Workout> {
-  for (let attempt=0; ; attempt++) {
+  let failure: unknown;
+  const repairable = (error: unknown) => error instanceof ProposalError || error instanceof SyntaxError ||
+    (error instanceof Error && error.name === "ZodError") ||
+    (error !== null && typeof error === "object" && "status" in error && error.status === 422);
+  for (let attempt = 0; attempt <= 2; attempt++) {
     try {
-      const prepared = omitUnavailableMachineAccessories(proposed,state);
-      const compiled = compileProposal(prepared.workout,state);
+      if (attempt > 0) {
+        const details = failure && typeof failure === "object" && "details" in failure ? JSON.stringify(failure.details) : "";
+        proposed = await repair(proposed, `${failure instanceof Error ? failure.message : String(failure)}${details ? ` Details: ${details}` : ""}`);
+      }
+      const prepared = omitUnavailableMachineAccessories(proposed, state);
+      const compiled = compileProposal(prepared.workout, state);
       if (prepared.omitted.length && compiled.prescription) {
         compiled.prescription.reasons.push(`Use the available equipment: ${prepared.omitted.join(", ")} was left out because its machine is not in your saved equipment. The remaining working exercises were kept.`);
         return finalize(prescriptionWorkout(compiled.prescription));
       }
       return finalize(compiled);
-    }
-    catch(error) {
-      if(attempt>=2) throw error;
-      const details = error && typeof error === "object" && "details" in error ? JSON.stringify(error.details) : "";
-      proposed=await repair(proposed,`${error instanceof Error ? error.message : String(error)}${details ? ` Details: ${details}` : ""}`);
+    } catch (error) {
+      if (!repairable(error) || attempt === 2) throw error;
+      failure = error;
     }
   }
+  throw failure;
+
 }
 
 /** A missing isolation machine must not discard a complete valid strength day.

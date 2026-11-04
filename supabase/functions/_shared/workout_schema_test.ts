@@ -131,3 +131,16 @@ Deno.test("malformed dose objects fail with their field path instead of erasing 
   assert(!v.ok);assert(v.error?.includes("dose"),v.error);
  }
 });
+
+Deno.test("weekly validation returns actionable dates before the repair pass", () => {
+  const dates = ["2026-11-04", "2026-11-05"];
+  const week = { days: [{ date: dates[0], session: runWorkout() }] };
+  const missing = validateWeekPlan(week, { dates });
+  assert(!missing.ok);
+  assert(missing.error?.includes(dates[1]));
+  assert(validateWeekPlan(week, { dates, protectedDates: new Set([dates[1]]) }).ok);
+  const extra = validateWeekPlan({ days: [...week.days, { date: "2026-11-06", session: runWorkout() }] }, { dates });
+  assert(!extra.ok);
+  assert(extra.error?.includes("2026-11-06"));
+  assert(!validateWeekPlan({ days: [...week.days, ...week.days] }, { dates }).ok);
+});
