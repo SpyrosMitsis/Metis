@@ -27,6 +27,21 @@ export function isoDate(value: unknown): string {
 export function reviewGeneratedWorkout(w: Workout, context: ReviewContext) {
   return reviewWorkout(w, { ...context, catalogOnly: true });
 }
+/** Run deterministic corrections to a bounded fixed point before the final gate.
+ * A rejection is returned to the same repair loop as compiler failures. */
+export function finalizeGeneratedWorkout(w: Workout, context: ReviewContext): Workout {
+  let candidate = w;
+  for (let pass = 0; pass < 4; pass++) {
+    const corrected = reviewGeneratedWorkout(candidate, context).corrected;
+    if (stableValue(corrected) === stableValue(candidate)) {
+      assertPublishable(corrected, context);
+      return corrected;
+    }
+    candidate = corrected;
+  }
+  assertPublishable(candidate, context);
+  return candidate;
+}
 /** Final gate, shared by daily, weekly and chat-adjusted generation. Failures
  * retain the old plan. No invented recovery day masks a provider failure. */
 export function assertPublishable(w: Workout, context: ReviewContext): void {
@@ -42,9 +57,9 @@ export function assertPublishable(w: Workout, context: ReviewContext): void {
   if (w.type !== "rest" && (!w.sections.some(s => s.exercises.length) || w.duration_minutes <= 0))
     throw new PlanError("No compatible session could be generated. Your existing plan was kept.",422,"EMPTY_SESSION");
   const review = reviewGeneratedWorkout(w, context);
-  if (review.unsafe.length || review.issues.length || JSON.stringify(review.corrected) !== JSON.stringify(w))
+  if (review.unsafe.length || review.issues.length || stableValue(review.corrected) !== stableValue(w))
     throw new PlanError("The session still violates content constraints. Your existing plan was kept.",422,"CONTENT_CONSTRAINT",
-      { issues: review.issues, unsafe: review.unsafe, corrections_required: JSON.stringify(review.corrected) !== JSON.stringify(w) });
+      { issues: review.issues, unsafe: review.unsafe, corrections_required: stableValue(review.corrected) !== stableValue(w) });
 }
 export async function planRevision(admin: SupabaseClient, owner: string): Promise<number> {
   const { data, error } = await admin.rpc("plan_revision", { p_owner: owner });

@@ -9,7 +9,7 @@ import { sessionState, withForecast } from "../_shared/session_context.ts";
 import { SESSION_POLICY } from "../_shared/session_engine.ts";
 import { deterministicWeek } from "../_shared/deterministic_week.ts";
 import { dailyMinutes, explicitImplements } from "../_shared/session_context.ts";
-import { assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
+import { finalizeGeneratedWorkout, assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
 import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // plan-week — the mature planner: generate a coherent, periodized 7-day
 // microcycle in one shot (80/20 distribution, recovery spacing, weekly volume
@@ -465,7 +465,7 @@ async function planForUser(admin: SupabaseClient, userId: string, start: string,
       await logLlmResult(admin,userId,"plan",hosted,repair,profile,{systemPrompt:SYSTEM_PROMPT,userPrompt:prompt,rawResponse:repair.text,parsedOk:checked.ok,error:checked.ok?null:checked.error});
       if(!checked.ok||!checked.workout)throw new PlanError(checked.error??"Invalid session repair",422,"DOSE_INVALID");
       return checked.workout;
-    });
+    }, compiled => finalizeGeneratedWorkout(compiled, reviewContext));
     const overlap = overlapReason(date, session.type, demandingWorkout(session), athleteState.actual,
       [...(lockedRows ?? []).filter(r => !r.skipped).map(r => ({ date: r.date, workout: r.workout_json as Workout })), ...rows.map(r => ({ date: r.date, workout: r.workout_json }))]);
     if (overlap) throw new PlanError(overlap, 422, "RECOVERY_CONFLICT");

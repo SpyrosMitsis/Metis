@@ -9,7 +9,7 @@ import { PrescriptionSchema, prescriptionTotals, prescriptionWorkout } from "./p
 import { calibratedBlocks } from "./target_selection.ts";
 import { resolveVenue, rejectTemplate, sessionProposalLimits, SESSION_TEMPLATES, type SessionState } from "./session_engine.ts";
 
-export class ProposalError extends Error {}
+export class ProposalError extends Error { status = 422; }
 
 /** A weekly repair is a separate model request, so it must carry its own
  * catalog and athlete constraints rather than relying on the week prompt. */
@@ -79,9 +79,10 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
         if (!entry) throw new ProposalError(`Exercise is not in the bundled catalog: ${e.name}`);
         const meta = requirements(entry);
         if (!meta.implements.every(i => state.implements.includes(i))) throw new ProposalError(`Unavailable implements for ${e.name}`);
-        const reps = /^(\d+)(?:\s*[-–]\s*(\d+))?$/.exec(e.reps.replace(/(?:\/?side|each side|per side)/gi, "").trim());
-        const hold = /^(\d+)\s*(?:s|sec|seconds?)$/.exec(e.reps);
-        const carry = /^(\d+)\s*(?:m|metres?|meters?)$/.exec(e.reps);
+        const doseText = e.reps.toLowerCase().replace(/(?:\/\s*side|each side|per side)/g, "").trim();
+        const reps = /^(\d+)(?:\s*[-–]\s*(\d+))?$/.exec(doseText);
+        const hold = /^(\d+)\s*(?:s|sec|seconds?)$/.exec(doseText);
+        const carry = /^(\d+)\s*(?:m|metres?|meters?)$/.exec(doseText);
         const amrap = /amrap/i.test(e.reps) && e.dose?.work_seconds;
         if (!reps && !hold && !carry && !amrap) throw new ProposalError(`Explicit repetitions, hold seconds or carry distance required for ${e.name}`);
         const last = state.last_loads?.[meta.id];
@@ -161,12 +162,40 @@ export function compileProposal(w: Workout, state: SessionState): Workout {
 
 /** Bounded repair: every revision is compiled again against the original state. */
 export async function compileWithRepairs(proposed: Workout, state: SessionState,
-  repair: (previous: Workout, error: string) => Promise<Workout>): Promise<Workout> {
+  repair: (previous: Workout, error: string) => Promise<Workout>,
+  finalize: (compiled: Workout) => Workout = compiled => compiled): Promise<Workout> {
   for (let attempt=0; ; attempt++) {
-    try { return compileProposal(proposed,state); }
+    try {
+      const prepared = omitUnavailableMachineAccessories(proposed,state);
+      const compiled = compileProposal(prepared.workout,state);
+      if (prepared.omitted.length && compiled.prescription) {
+        compiled.prescription.reasons.push(`Use the available equipment: ${prepared.omitted.join(", ")} was left out because its machine is not in your saved equipment. The remaining working exercises were kept.`);
+        return finalize(prescriptionWorkout(compiled.prescription));
+      }
+      return finalize(compiled);
+    }
     catch(error) {
       if(attempt>=2) throw error;
       proposed=await repair(proposed,error instanceof Error ? error.message : String(error));
     }
   }
+}
+
+/** A missing isolation machine must not discard a complete valid strength day.
+ * Never remove a primary compound, invent an equivalent, or transfer loads. */
+function omitUnavailableMachineAccessories(w: Workout,state: SessionState): {workout:Workout;omitted:string[]} {
+  if (w.type!=="strength" || w.prescription) return {workout:w,omitted:[]};
+  const omitted:string[]=[];
+  const sections=w.sections.map(section=>({...section,exercises:section.exercises.filter(ex=>{
+    const entry=EXERCISE_CATALOG.find(e=>e.name===ex.name);
+    if(entry?.category==="Machine" && !entry.compound && requirements(entry).movement==="accessory" && !requirements(entry).implements.every(item=>state.implements.includes(item))) {
+      omitted.push(ex.name); return false;
+    }
+    return true;
+  })})).filter(section=>section.exercises.length);
+  const working=sections.filter(s=>role(s.name)==="main").flatMap(s=>s.exercises);
+  // Keep failed candidates intact for targeted model repair when dropping the
+  // accessory would leave too little of the requested session.
+  if(!omitted.length || new Set(working.map(e=>e.name)).size<2) return {workout:w,omitted:[]};
+  return {workout:{...w,sections},omitted};
 }

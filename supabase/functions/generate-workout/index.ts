@@ -8,7 +8,7 @@ import { buildSession, eligibleSessionExercises, sessionProposalLimits, SESSION_
 import { dailyMinutes, explicitImplements, sessionState, remainingWeekMinutes } from "../_shared/session_context.ts";
 import { deriveProgramState, programGoals } from "../_shared/program_state.ts";
 import type { SessionObjective, TrainingSport } from "../../../shared/prescription.ts";
-import { assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
+import { finalizeGeneratedWorkout, assertPublishable, isoDate, PlanError, planRevision, replacePlan, requestId, reviewGeneratedWorkout, savedRequest } from "../_shared/plan_store.ts";
 import { drainCalendarOutbox } from "../_shared/calendar_outbox.ts";
 // generate-workout — the full AI generation flow.
 //
@@ -739,45 +739,8 @@ Return the revised workout as JSON only, same schema.`;
       const repair=validateWorkout(extractJson(retry.text));
       if(!repair.ok||!repair.workout){await logLlmResult(admin,userId,"workout",hosted,retry,profile,{parsedOk:false,error:repair.error??"Invalid repair"});throw new PlanError(repair.error??"Invalid dose repair",422,"DOSE_INVALID");}
       outcome=retry;return repair.workout;
-    });
-    let review = reviewGeneratedWorkout(validated, reviewCtx);
-    validated = review.corrected;
-    if (review.violations.length) {
-      try {
-        const fixPrompt =
-          `${userPrompt}\n\nYOUR PREVIOUS WORKOUT had these problems, fix ALL of them and ` +
-          `return ONLY corrected JSON matching the schema:\n- ${review.violations.join("\n- ")}`;
-        const retry = await llmGenerateWithFallback(
-          chain,
-          {
-            prompt: fixPrompt,
-            systemPrompt: SYSTEM_PROMPT,
-            temperature: 0.4,
-            hosted,
-            feature: "workout",
-            jsonSchema: { name: "emit_workout", schema: WORKOUT_TOOL_SCHEMA },
-          },
-          resolveKey,
-          resolveModel,
-          resolveBaseUrl,
-        );
-        const v2 = validateWorkout(extractJson(retry.text));
-        if (v2.ok && v2.workout) {
-          const w2 = compileProposal(v2.workout, constrainSession(proposalState, reviewCtx));
-          const r2 = reviewGeneratedWorkout(w2, reviewCtx);
-          // Keep the repair only if it genuinely reduced the violation count.
-          if (r2.violations.length < review.violations.length) {
-            validated = r2.corrected;
-            review = r2;
-            outcome = retry;
-          }
-        }
-      } catch (_e) {
-        // Keep the auto-corrected version on any repair failure.
-      }
-    }
-
-    assertPublishable(validated, reviewCtx);
+    }, compiled => finalizeGeneratedWorkout(compiled, reviewCtx));
+    const review = reviewGeneratedWorkout(validated, reviewCtx);
 
     // Recompute cost in case the repair pass replaced `outcome`.
     const finalCost = estimateCostUsd(outcome.provider, outcome.promptTokens, outcome.completionTokens, customPriceFromProfile(outcome.provider, profile), outcome.model);

@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import { compileWithRepairs, ProposalError, sessionRepairPrompt } from "./proposal_compiler.ts";
 import { sessionProposalLimits, type SessionState } from "./session_engine.ts";
+import { assertPrescriptionProjection } from "./prescription.ts";
 import type { Workout } from "./types.ts";
 
 const state: SessionState = {
@@ -33,6 +34,30 @@ Deno.test("weekly repair carries exact equipment-eligible names and exclusions i
   assertEquals(sessionProposalLimits({ ...state, sport: "run" }).allowed_strength_exercises, undefined);
 });
 
+Deno.test("an unavailable hip-abduction accessory cannot discard the remaining complete strength session",async()=>{
+  const base=structuredClone(proposed.sections[1].exercises[0]);
+  const candidate:Workout={...proposed,sections:[{name:"Main",duration_minutes:15,exercises:[
+    base,{...base,name:"Glute Bridge (Bodyweight)"},{...base,name:"Hip Abduction",weight_kg:40},
+  ]}]};
+  let repairs=0;
+  const result=await compileWithRepairs(candidate,state,async()=>{repairs++;return candidate;});
+  assertEquals(repairs,0);
+  assert(!result.sections.some(s=>s.exercises.some(e=>e.name==="Hip Abduction")));
+  assert(result.sections.some(s=>s.exercises.some(e=>e.name==="Bodyweight Squat")));
+  assertStringIncludes(result.coach_note,"Hip Abduction was left out");
+  assertPrescriptionProjection(result);
+  const equipped=await compileWithRepairs(candidate,{...state,implements:["hip_abduction_machine"]},async()=>candidate);
+  assert(equipped.sections.some(s=>s.exercises.some(e=>e.name==="Hip Abduction")));
+});
+
+Deno.test("equipment repair must not drop a primary lift or publish only one remaining working exercise",async()=>{
+  const base=structuredClone(proposed.sections[1].exercises[0]);
+  for(const name of ["Hip Abduction","Leg Press"]) {
+    const candidate:Workout={...proposed,sections:[{name:"Main",duration_minutes:15,exercises:[base,{...base,name}]}]};
+    await assertRejects(()=>compileWithRepairs(candidate,state,async()=>candidate),ProposalError,"Unavailable implements");
+  }
+});
+
 Deno.test("Arm Circles failure can be repaired without weakening the compiler catalog gate", async () => {
   let calls = 0;
   const result = await compileWithRepairs(proposed, state, async (previous, error) => {
@@ -47,4 +72,37 @@ Deno.test("Arm Circles failure can be repaired without weakening the compiler ca
   assert(result.prescription.blocks.every(b => b.kind === "strength" && b.name === "Bodyweight Squat"));
   await assertRejects(() => compileWithRepairs(proposed, state, async previous => previous), ProposalError,
     "Exercise is not in the bundled catalog: Arm Circles");
+});
+
+Deno.test("final validation failures participate in bounded proposal repair", async () => {
+  const valid = structuredClone(proposed);
+  valid.sections = [valid.sections[1]];
+  let repairs = 0;
+  let gates = 0;
+  const result = await compileWithRepairs(valid, state, async (_previous, error) => {
+    assertStringIncludes(error, "content constraint");
+    repairs++;
+    return valid;
+  }, compiled => {
+    if (++gates === 1) throw new ProposalError("content constraint");
+    return compiled;
+  });
+  assertEquals(repairs, 1);
+  assertPrescriptionProjection(result);
+  repairs = 0;
+  await assertRejects(() => compileWithRepairs(valid, state, async () => {
+    repairs++;
+    return valid;
+  }, () => { throw new ProposalError("persistent content constraint"); }), ProposalError);
+  assertEquals(repairs, 2);
+});
+
+Deno.test("timed unilateral doses accept explicit per-side units without model repair", async () => {
+  const valid = structuredClone(proposed);
+  valid.sections = [{ ...valid.sections[1], exercises: [{ ...valid.sections[1].exercises[0], name: "Side Plank", reps: "30 seconds per side", sets: 1 }] }];
+  const result = await compileWithRepairs(valid, state, async () => { throw new Error("Unexpected repair"); });
+  assertPrescriptionProjection(result);
+  const block = result.prescription!.blocks[0];
+  assert(block.kind === "strength");
+  assertEquals(block.hold_seconds, 30);
 });
