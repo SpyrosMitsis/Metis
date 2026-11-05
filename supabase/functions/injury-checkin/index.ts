@@ -23,6 +23,7 @@ import {
   markInjuryChecked,
   upsertBackoff,
 } from "../_shared/injury.ts";
+import { editRestriction, RestrictionEditError } from "../_shared/restriction_edit.ts";
 import { logger } from "../_shared/log.ts";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -50,6 +51,18 @@ Deno.serve(async (req) => {
       .eq("id", userId)
       .single();
     if (!profile) return json({ error: "profile not found" }, 404);
+
+    if (body.kind === "restriction") {
+      const entries = Array.isArray(profile.injury_backoff) ? profile.injury_backoff : [];
+      let next;
+      try { next = editRestriction(entries, body); }
+      catch (e) { if (e instanceof RestrictionEditError) return json({ error: e.message }, e.status); throw e; }
+      const { data, error } = await admin.from("user_profiles").update({ injury_backoff: next })
+        .eq("id", userId).eq("injury_backoff", JSON.stringify(entries)).select("id");
+      if (error) throw error;
+      if (!data?.length) return json({ error: "Your restrictions changed while saving. Reload and try again." }, 409);
+      return json({ ok: true });
+    }
 
     const onboarding = (profile.onboarding ?? {}) as Record<string, unknown>;
     const injuries = injuriesOf(onboarding);

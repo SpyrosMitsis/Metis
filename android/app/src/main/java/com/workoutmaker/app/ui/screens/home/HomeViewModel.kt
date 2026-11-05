@@ -319,7 +319,7 @@ class HomeViewModel @Inject constructor(
     fun saveManualRecovery(hrvMs: Double?, restingHr: Int?, sleepMinutes: Int?) = viewModelScope.launch {
         runCatching { repo.upsertManualRecovery(selectedDate.value.toString(), hrvMs, restingHr, sleepMinutes) }
             .onSuccess { load() }
-            .onFailure { error.value = it.message }
+            .onFailure { error.value = com.workoutmaker.app.util.reportFailure(it) }
     }
 
     fun saveWellness(energy: Int, soreness: Int) = viewModelScope.launch {
@@ -334,7 +334,7 @@ class HomeViewModel @Inject constructor(
             // generation on a placeholder readiness), so THIS is the moment the
             // day's note becomes worth generating.
             .onSuccess { wellnessToday.value = checkin; load() }
-            .onFailure { error.value = it.message }
+            .onFailure { error.value = com.workoutmaker.app.util.reportFailure(it) }
         wellnessBusy.value = false
     }
 
@@ -440,7 +440,7 @@ class HomeViewModel @Inject constructor(
         val loc = location.lastKnown()
         runCatching {
             repo.generateWorkout(GenerateRequest(type = type, request = instruction.takeIf { it.isNotBlank() }, lat = loc?.first, lon = loc?.second))
-        }.onFailure { error.value = it.message }
+        }.onFailure { error.value = com.workoutmaker.app.util.reportFailure(it) }
         generating.value = false
         load()
         repo.refreshMemory() // fire-and-forget; updates rolling athlete notes
@@ -451,7 +451,7 @@ class HomeViewModel @Inject constructor(
         adjusting.value = true
         runCatching {
             repo.adjustWorkout(base, instruction, LocalDate.now().toString())
-        }.onFailure { error.value = it.message }
+        }.onFailure { error.value = com.workoutmaker.app.util.reportFailure(it) }
         adjusting.value = false
         load()
     }
@@ -468,7 +468,7 @@ class HomeViewModel @Inject constructor(
                 val loc = location.lastKnown()
                 repo.generateWorkout(GenerateRequest(type = type, request = tweak.takeIf { it.isNotBlank() }, lat = loc?.first, lon = loc?.second))
             }
-        }.onFailure { error.value = it.message }
+        }.onFailure { error.value = com.workoutmaker.app.util.reportFailure(it) }
         generating.value = false
         load()
         repo.refreshMemory()
@@ -574,7 +574,7 @@ class HomeViewModel @Inject constructor(
                 }
                 load()
             }
-            .onFailure { injuryStatus.value = it.message }
+            .onFailure { injuryStatus.value = com.workoutmaker.app.util.reportFailure(it) }
         injuryBusy.value = false
     }
 
@@ -596,7 +596,7 @@ class HomeViewModel @Inject constructor(
             val workout = summary.value?.today_workout ?: return@launch
             runCatching { repo.undoSkip(workout.id) }
                 .onSuccess { feedbackStatus.value = "Marked as not done"; load() }
-                .onFailure { feedbackStatus.value = "Couldn't update: ${it.message}" }
+                .onFailure { feedbackStatus.value = "Couldn't update: ${com.workoutmaker.app.util.reportFailure(it)}" }
         } finally {
             submittingFeedback.value = false
         }
@@ -606,6 +606,6 @@ class HomeViewModel @Inject constructor(
         val today = summary.value?.today_workout ?: return@launch
         runCatching { repo.undoSkip(today.id) }
             .onSuccess { feedbackStatus.value = null; load() }
-            .onFailure { feedbackStatus.value = it.message }
+            .onFailure { feedbackStatus.value = com.workoutmaker.app.util.reportFailure(it) }
     }
 }

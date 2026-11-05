@@ -32,13 +32,19 @@ object AppLog {
     }
 
     /** The local log file, or null if [install] was never called. */
-    fun file(): File? = logFile
+    fun file(): File? = logFile?.also { f -> runCatching { synchronized(this) { if (f.exists()) f.writeText(redactLog(f.readText())) } } }
 
-    fun d(area: String, msg: String) { if (BuildConfig.DEBUG) Log.d(TAG, "[$area] $msg"); append("D", area, msg) }
-    fun i(area: String, msg: String) { if (BuildConfig.DEBUG) Log.i(TAG, "[$area] $msg"); append("I", area, msg) }
-    fun w(area: String, msg: String, t: Throwable? = null) { if (BuildConfig.DEBUG) Log.w(TAG, "[$area] $msg", t); append("W", area, msg, t) }
-    fun e(area: String, msg: String, t: Throwable? = null) { if (BuildConfig.DEBUG) Log.e(TAG, "[$area] $msg", t); append("E", area, msg, t) }
+    fun d(area: String, msg: String) = write("D", area, msg)
+    fun i(area: String, msg: String) = write("I", area, msg)
+    fun w(area: String, msg: String, t: Throwable? = null) = write("W", area, msg, t)
+    fun e(area: String, msg: String, t: Throwable? = null) = write("E", area, msg, t)
+    private fun write(level: String, area: String, msg: String, t: Throwable? = null) {
+        val safe = redactLog(msg + (t?.let { " :: " + it.stackTraceToString() } ?: ""))
+        if (BuildConfig.DEBUG) Log.println(when(level) { "E" -> Log.ERROR; "W" -> Log.WARN; "D" -> Log.DEBUG; else -> Log.INFO }, TAG, "[$area] $safe")
+        append(level, area, safe.take(4000))
+    }
 
+    @Synchronized
     private fun append(level: String, area: String, msg: String, t: Throwable? = null) {
         val f = logFile ?: return
         runCatching {

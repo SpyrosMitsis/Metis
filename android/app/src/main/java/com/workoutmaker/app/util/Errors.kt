@@ -41,6 +41,8 @@ fun friendlyFnError(t: Throwable, fallback: String = "Something went wrong. Try 
     serverErrorText(t)?.let { return it }
     val m = t.message ?: return fallback
     return when {
+        m.contains("Week planning is already running") -> "Week planning is already running. Check the calendar for progress."
+        m.contains("Unauthorized", true) || m.contains("JWT expired", true) -> "Your session expired. Sign in again, then retry."
         m.contains("timeout", true) || m.contains("timed out", true) ->
             "That took too long to come back. Try again."
         m.contains("Unable to resolve host", true) || m.contains("Failed to connect", true) ||
@@ -82,6 +84,8 @@ fun friendlyError(error: Any?): String {
         null -> ""
         else -> error.toString()
     }
+    val reference = Regex("Support reference: ([a-fA-F0-9-]{36})").find(msg)?.groupValues?.get(1)
+    if (reference != null) return friendlyError(msg.substringBefore("Support reference:").trimEnd()) + "\nSupport reference: $reference"
     val low = msg.lowercase()
     return when {
         low.isBlank() -> "Something went wrong. Please try again."
@@ -93,4 +97,10 @@ fun friendlyError(error: Any?): String {
         msg.length > 140 -> "Something went wrong. Please try again."
         else -> msg
     }
+}
+
+/** One support reference links the visible failure to a redacted local log. */
+fun reportFailure(t: Throwable, fallback: String = "Couldn’t complete that action. Please try again.", reference: String = java.util.UUID.randomUUID().toString()): String {
+    AppLog.e("support", "reference=$reference", t)
+    return "${friendlyFnError(t, fallback)}\nSupport reference: $reference"
 }

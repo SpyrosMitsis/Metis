@@ -223,7 +223,7 @@ class OnboardingViewModel @Inject constructor(
                 if (it.is_valid) { repo.setActiveProvider(provider); keyStatus.value = "✓ ${provider.label} key saved & active" }
                 else keyStatus.value = "✗ ${it.error ?: "invalid key"}"
             }
-            .onFailure { keyStatus.value = "Failed: ${it.message}" }
+            .onFailure { keyStatus.value = "Failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -235,7 +235,7 @@ class OnboardingViewModel @Inject constructor(
                 intervalsStatus.value = if (it.ok) "✓ Connected as ${it.athlete_name}" else "Failed: ${it.error}"
                 if (it.ok) runCatching { repo.syncIntervals() }
             }
-            .onFailure { intervalsStatus.value = "Failed: ${it.message}" }
+            .onFailure { intervalsStatus.value = "Failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -264,7 +264,7 @@ class OnboardingViewModel @Inject constructor(
                 }
                 complete.value = true
             }
-            .onFailure { finishStatus.value = "Couldn't save your profile: ${it.message}. Check your connection and try again." }
+            .onFailure { finishStatus.value = "Couldn't save your profile: ${com.workoutmaker.app.util.reportFailure(it)}. Check your connection and try again." }
         busy.value = false
     }
 

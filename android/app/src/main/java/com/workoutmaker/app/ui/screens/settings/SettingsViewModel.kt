@@ -1,5 +1,8 @@
 package com.workoutmaker.app.ui.screens.settings
 
+import com.workoutmaker.app.data.restrictions
+import com.workoutmaker.app.data.saveRestriction
+
 import com.workoutmaker.app.util.runCatching
 
 import androidx.compose.foundation.layout.size
@@ -213,6 +216,27 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    val restrictions = MutableStateFlow<List<kotlinx.serialization.json.JsonObject>>(emptyList())
+    val restrictionStatus = MutableStateFlow<String?>(null)
+    val restrictionBusy = MutableStateFlow(false)
+    fun loadRestrictions() = viewModelScope.launch {
+        runCatching { repo.restrictions() }.onSuccess { restrictions.value = it }
+            .onFailure { restrictionStatus.value = com.workoutmaker.app.util.reportFailure(it) }
+    }
+    fun saveRestriction(expected: kotlinx.serialization.json.JsonObject, level: String, until: String, sports: List<String>) {
+        if (!restrictionBusy.compareAndSet(false, true)) return
+        viewModelScope.launch {
+            try {
+                java.time.LocalDate.parse(until)
+                repo.saveRestriction(expected, level, until, sports)
+                restrictions.value = repo.restrictions()
+                restrictionStatus.value = "Restriction saved. Changes apply to future planning."
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { restrictionStatus.value = com.workoutmaker.app.util.reportFailure(e, "Check the end date and try again.")
+            } finally { restrictionBusy.value = false }
+        }
+    }
+
     // --- Pro plan / hosted AI (only when this build can bill AND this server
     // hosts an LLM key — self-hosted stacks and foss builds never see it) ----
     val planStatus = MutableStateFlow(PlanStatus())
@@ -240,7 +264,7 @@ class SettingsViewModel @Inject constructor(
             val token = billing.currentPurchaseToken() ?: error("No active subscription found on this Google account.")
             repo.verifyPurchase(token)
             planStatus.value = repo.planStatus()
-        }.onFailure { proError.value = it.message }
+        }.onFailure { proError.value = com.workoutmaker.app.util.reportFailure(it) }
         proBusy.value = false
     }
 
@@ -294,7 +318,7 @@ class SettingsViewModel @Inject constructor(
                 Log.e("IMPORT", "import threw", it)
                 importResult.value = ImportSummary(
                     ok = false, error = "${it::class.simpleName}: ${it.message ?: "unknown error"}")
-                importStatus.value = "Import failed: ${it.message}"
+                importStatus.value = "Import failed: ${com.workoutmaker.app.util.reportFailure(it)}"
             }
         importBusy.value = false
     }
@@ -312,7 +336,7 @@ class SettingsViewModel @Inject constructor(
             .onSuccess { modelLists[p.key] = it }
             .onFailure {
                 modelLists[p.key] = ModelListResponse(
-                    provider = p.key, error = it.message ?: "couldn't fetch models")
+                    provider = p.key, error = com.workoutmaker.app.util.reportFailure(it, "Couldn’t fetch models. Check your connection and try again."))
             }
         modelBusy.value = null
     }
@@ -321,7 +345,7 @@ class SettingsViewModel @Inject constructor(
         runCatching {
             repo.setModelOverride(p, model)
             modelOverrides.value = repo.modelOverrides()
-        }.onFailure { saveStatus.value = "Couldn't set model: ${it.message}" }
+        }.onFailure { saveStatus.value = "Couldn't set model: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     val profile = MutableStateFlow(TrainingProfile())
@@ -390,7 +414,7 @@ class SettingsViewModel @Inject constructor(
                 today?.sleepMinutes?.let { append(" · sleep ${it / 60}h${it % 60}m") }
                 if (result.activitiesUpserted > 0) append(" · ${result.activitiesUpserted} workouts")
             }
-        }.onFailure { healthStatus.value = "Failed: ${it.message}" }
+        }.onFailure { healthStatus.value = "Failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     val autoPlan = MutableStateFlow(false)
@@ -488,7 +512,7 @@ class SettingsViewModel @Inject constructor(
             }
             races.value = repo.races()
             repo.loadProfile()?.let { profile.value = it }
-        }.onSuccess { saveStatus.value = "✓ Goal added" }.onFailure { saveStatus.value = "Couldn't add: ${it.message}" }
+        }.onSuccess { saveStatus.value = "✓ Goal added" }.onFailure { saveStatus.value = "Couldn't add: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     fun deleteRace(r: Race) = viewModelScope.launch {
@@ -496,13 +520,13 @@ class SettingsViewModel @Inject constructor(
             repo.deleteRace(r)
             races.value = repo.races()
             repo.loadProfile()?.let { profile.value = it }
-        }.onFailure { saveStatus.value = "Couldn't delete: ${it.message}" }
+        }.onFailure { saveStatus.value = "Couldn't delete: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     fun makeGoalRace(r: Race) = viewModelScope.launch {
         runCatching { repo.setGoalRace(r); repo.loadProfile()?.let { profile.value = it } }
             .onSuccess { saveStatus.value = "✓ “${r.name}” is now your goal" }
-            .onFailure { saveStatus.value = it.message }
+            .onFailure { saveStatus.value = com.workoutmaker.app.util.reportFailure(it) }
     }
 
     // Thresholds are set by logging a test and nothing else, so the value and
@@ -513,7 +537,7 @@ class SettingsViewModel @Inject constructor(
             thresholdTests.value = repo.thresholdTests()
             repo.loadProfile()?.let { profile.value = it }
         }.onSuccess { saveStatus.value = "✓ Test logged, zones updated" }
-            .onFailure { saveStatus.value = "Couldn't log: ${it.message}" }
+            .onFailure { saveStatus.value = "Couldn't log: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     fun updateKnowledge(text: String) { knowledge.value = text }
@@ -522,7 +546,7 @@ class SettingsViewModel @Inject constructor(
         busy.value = true
         runCatching { repo.saveKnowledge(knowledge.value) }
             .onSuccess { knowledgeStatus.value = "✓ Saved" }
-            .onFailure { knowledgeStatus.value = "Couldn't save: ${it.message}" }
+            .onFailure { knowledgeStatus.value = "Couldn't save: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -532,7 +556,7 @@ class SettingsViewModel @Inject constructor(
         busy.value = true
         runCatching { repo.saveMemory(memory.value) }
             .onSuccess { memoryStatus.value = "✓ Saved" }
-            .onFailure { memoryStatus.value = "Couldn't save: ${it.message}" }
+            .onFailure { memoryStatus.value = "Couldn't save: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -542,7 +566,7 @@ class SettingsViewModel @Inject constructor(
         busy.value = true
         runCatching { repo.saveSoul(soul.value) }
             .onSuccess { soulStatus.value = "✓ Saved" }
-            .onFailure { soulStatus.value = "Couldn't save: ${it.message}" }
+            .onFailure { soulStatus.value = "Couldn't save: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -552,14 +576,14 @@ class SettingsViewModel @Inject constructor(
         memoryStatus.value = "Refreshing from recent training…"
         runCatching { repo.refreshMemory(); repo.loadMemory() }
             .onSuccess { memory.value = it; memoryStatus.value = "✓ Updated" }
-            .onFailure { memoryStatus.value = "Couldn't refresh: ${it.message}" }
+            .onFailure { memoryStatus.value = "Couldn't refresh: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
     fun setAutoPlan(enabled: Boolean) = viewModelScope.launch {
         autoPlan.value = enabled
         runCatching { repo.setAutoPlan(enabled) }
-            .onFailure { autoPlan.value = !enabled; saveStatus.value = "Couldn't update: ${it.message}" }
+            .onFailure { autoPlan.value = !enabled; saveStatus.value = "Couldn't update: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     fun updateProfile(transform: (TrainingProfile) -> TrainingProfile) {
@@ -571,7 +595,7 @@ class SettingsViewModel @Inject constructor(
         // Derive the single-value fields the live backend reads from the rich ones.
         runCatching { repo.saveProfile(profile.value.deriveLegacyFields()) }
             .onSuccess { saveStatus.value = "✓ Saved" }
-            .onFailure { saveStatus.value = it.message }
+            .onFailure { saveStatus.value = com.workoutmaker.app.util.reportFailure(it) }
         busy.value = false
     }
 
@@ -587,7 +611,7 @@ class SettingsViewModel @Inject constructor(
                     runCatching { repo.syncIntervals() }
                 }
             }
-            .onFailure { intervalsStatus.value = "Failed: ${it.message}" }
+            .onFailure { intervalsStatus.value = "Failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -598,7 +622,7 @@ class SettingsViewModel @Inject constructor(
         intervalsStatus.value = "Syncing…"
         runCatching { repo.syncIntervals() }
             .onSuccess { intervalsStatus.value = "✓ Synced from Intervals.icu" }
-            .onFailure { intervalsStatus.value = "Sync failed: ${it.message}" }
+            .onFailure { intervalsStatus.value = "Sync failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         busy.value = false
     }
 
@@ -629,7 +653,7 @@ class SettingsViewModel @Inject constructor(
                 // unreachable from the server, or DB migration not yet applied).
                 results[p.key] = TestKeyResponse(
                     provider = p.key, model = model ?: p.model, is_valid = false,
-                    error = it.message ?: "request failed",
+                    error = com.workoutmaker.app.util.reportFailure(it),
                 )
             }
             .onSuccess {
@@ -649,7 +673,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun signOut() = viewModelScope.launch {
-        runCatching { repo.signOut() }.onFailure { saveStatus.value = "Sign out failed: ${it.message}" }
+        runCatching { repo.signOut() }.onFailure { saveStatus.value = "Sign out failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     /** The signed-in address, for the Account screen's headline. Null when unknown. */
@@ -661,7 +685,7 @@ class SettingsViewModel @Inject constructor(
     fun deleteAccount() = viewModelScope.launch {
         deleteAccountState.value = ""
         runCatching { repo.deleteAccount() }
-            .onFailure { deleteAccountState.value = it.message ?: "Deletion failed, try again." }
+            .onFailure { deleteAccountState.value = com.workoutmaker.app.util.reportFailure(it) ?: "Deletion failed, try again." }
             .onSuccess { deleteAccountState.value = null }
         // On success AuthGate flips to the login screen by itself (session gone).
     }

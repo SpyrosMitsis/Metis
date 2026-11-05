@@ -449,7 +449,7 @@ internal fun ExportCard(vm: SettingsViewModel) {
                 context.contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray()) }
                 csv.count { it == '\n' } - 1
             }
-            status = ok.fold({ "✓ Exported $it sets to CSV." }, { "Export failed: ${it.message}" })
+            status = ok.fold({ "✓ Exported $it sets to CSV." }, { "Export failed: ${com.workoutmaker.app.util.reportFailure(it)}" })
         }
     }
     LinkCard(
@@ -482,7 +482,7 @@ internal fun DebugLogSection(vm: SettingsViewModel) {
                 val text = com.workoutmaker.app.util.AppLog.file()?.takeIf { it.exists() }?.readText().orEmpty()
                 context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
             }
-            exportStatus = ok.fold({ "✓ Log exported." }, { "Export failed: ${it.message}" })
+            exportStatus = ok.fold({ "✓ Log exported." }, { "Export failed: ${com.workoutmaker.app.util.reportFailure(it)}" })
         }
     }
     SectionCard {

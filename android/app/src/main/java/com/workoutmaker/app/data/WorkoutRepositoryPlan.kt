@@ -61,7 +61,22 @@ suspend fun WorkoutRepository.templates(): List<WorkoutTemplate> =
         order("created_at", Order.DESCENDING)
     }.decodeList()
 
+suspend fun WorkoutRepository.prepareWeekRequest(req: PlanWeekRequest): PlanWeekRequest = withAccount {
+    req.copy(start_date = req.start_date ?: req.today,
+        calendar_busy = req.calendar_busy ?: calendarBusy(req.start_date ?: req.today, 7) ?: emptyList())
+}
+
+suspend fun WorkoutRepository.isWeekRequestSaved(id: String): Boolean = withAccount {
+    supabase.postgrest.from("plan_requests").select {
+        filter { eq("request_id", id); eq("user_id", uid()) }
+    }.decodeList<JsonObject>().isNotEmpty()
+}
+
+private val weekGenerationMutex = kotlinx.coroutines.sync.Mutex()
+
 suspend fun WorkoutRepository.planWeek(req: PlanWeekRequest): PlanWeekResult = withAccount {
+    check(weekGenerationMutex.tryLock()) { "Week planning is already running. Check the calendar for progress." }
+    try {
     // Opt-in: hand the planner the week's busy windows so it schedules
     // around life (long/hard sessions on free days). Times only, no titles.
     val enriched = req.copy(start_date = req.start_date ?: req.today, calendar_busy = req.calendar_busy ?: calendarBusy(req.start_date, days = 7))
@@ -72,6 +87,7 @@ suspend fun WorkoutRepository.planWeek(req: PlanWeekRequest): PlanWeekResult = w
     )
     syncPlanToDeviceCalendar()
     return@withAccount result
+    } finally { weekGenerationMutex.unlock() }
 }
 
 // P7: move a planned workout to another date — server-side, so the

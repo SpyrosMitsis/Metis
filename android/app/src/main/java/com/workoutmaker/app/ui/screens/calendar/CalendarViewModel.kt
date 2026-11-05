@@ -36,6 +36,8 @@ import com.workoutmaker.app.data.intervalsConnection
 import com.workoutmaker.app.data.loadProfile
 import com.workoutmaker.app.data.logManualActivity
 import com.workoutmaker.app.data.markPlannedComplete
+import com.workoutmaker.app.data.prepareWeekRequest
+import com.workoutmaker.app.data.isWeekRequestSaved
 import com.workoutmaker.app.data.planWeek
 import com.workoutmaker.app.data.plannedWorkouts
 import com.workoutmaker.app.data.pushWorkout
@@ -141,7 +143,7 @@ class CalendarViewModel @Inject constructor(
         if (hasIntervals) {
             runCatching { repo.syncIntervals() }
                 .onSuccess { banner.value = "✓ Synced, your recent activities are up to date."; load() }
-                .onFailure { banner.value = "Sync failed: ${it.message}" }
+                .onFailure { banner.value = "Sync failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         } else {
             // No intervals connection: Health Connect was the sync.
             banner.value = "✓ Synced, your recent activities are up to date."
@@ -153,13 +155,13 @@ class CalendarViewModel @Inject constructor(
     fun markComplete(plannedId: String, date: LocalDate, completed: Boolean) = viewModelScope.launch {
         runCatching { repo.markPlannedComplete(plannedId, date.toString(), completed, if (completed) "just_right" else null, null) }
             .onSuccess { banner.value = if (completed) "✓ Marked done" else "Marked skipped"; load() }
-            .onFailure { banner.value = it.message }
+            .onFailure { banner.value = com.workoutmaker.app.util.reportFailure(it) }
     }
 
     fun undoSkip(plannedId: String) = viewModelScope.launch {
         runCatching { repo.undoSkip(plannedId) }
             .onSuccess { banner.value = "Skip undone"; load() }
-            .onFailure { banner.value = "Couldn't update: ${it.message}" }
+            .onFailure { banner.value = "Couldn't update: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     // Undo a completion (in case of a mistake) — flips the flag without logging
@@ -167,7 +169,7 @@ class CalendarViewModel @Inject constructor(
     fun markUndone(plannedId: String) = viewModelScope.launch {
         runCatching { repo.undoSkip(plannedId) }
             .onSuccess { banner.value = "Marked as not done"; load() }
-            .onFailure { banner.value = "Couldn't update: ${it.message}" }
+            .onFailure { banner.value = "Couldn't update: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     // Open a planned strength session in the Strength logger, pre-filled and
@@ -184,20 +186,20 @@ class CalendarViewModel @Inject constructor(
     fun deletePlanned(plannedId: String) = viewModelScope.launch {
         runCatching { repo.deletePlannedWorkout(plannedId) }
             .onSuccess { banner.value = "Workout deleted"; load() }
-            .onFailure { banner.value = "Couldn't delete: ${it.message}" }
+            .onFailure { banner.value = "Couldn't delete: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     fun logActivity(date: LocalDate, type: String, durationMin: Int, distanceKm: Double?, rpe: Int?) = viewModelScope.launch {
         runCatching { repo.logManualActivity(date.toString(), type, durationMin, distanceKm, rpe) }
             .onSuccess { banner.value = "✓ Logged $type session"; load() }
-            .onFailure { banner.value = "Failed to log: ${it.message}" }
+            .onFailure { banner.value = "Failed to log: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     // #3: lock/unlock a session so the weekly re-planner leaves it fixed.
     fun toggleLock(w: PlannedWorkout) = viewModelScope.launch {
         runCatching { repo.setLocked(w.id, !w.locked) }
             .onSuccess { banner.value = if (!w.locked) "🔒 Locked, re-planning won't touch it" else "Unlocked"; load() }
-            .onFailure { banner.value = "Couldn't update: ${it.message}" }
+            .onFailure { banner.value = "Couldn't update: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     // #3: ask the AI for a fixed, locked-in session on a specific date from a
@@ -211,7 +213,7 @@ class CalendarViewModel @Inject constructor(
                 else "AI couldn't build it, check your AI provider key in Settings."
                 load()
             }
-            .onFailure { banner.value = "Failed: ${it.message}" }
+            .onFailure { banner.value = "Failed: ${com.workoutmaker.app.util.reportFailure(it)}" }
         planning.value = false
     }
 
@@ -224,28 +226,70 @@ class CalendarViewModel @Inject constructor(
         }.onSuccess {
             banner.value = "✓ Added “${workout.title}” to $date" + (if (push) " · pushed to watch" else "")
             load()
-        }.onFailure { banner.value = "Couldn't save: ${it.message}" }
+        }.onFailure { banner.value = "Couldn't save: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
     // P7: move a planned workout to a new date.
     fun reschedule(plannedId: String, newDate: LocalDate) = viewModelScope.launch {
         runCatching { repo.reschedulePlanned(plannedId, newDate.toString()) }
             .onSuccess { banner.value = "Moved to $newDate"; load() }
-            .onFailure { banner.value = "Couldn't move: ${it.message}" }
+            .onFailure { banner.value = "Couldn't move: ${com.workoutmaker.app.util.reportFailure(it)}" }
     }
 
-    fun planWeek(start: LocalDate) = viewModelScope.launch {
-        planning.value = true
-        banner.value = "Planning your week from $start…"
-        runCatching { repo.planWeek(PlanWeekRequest(start_date = start.toString())) }
-            .onSuccess { r ->
-                banner.value = r.error
-                    ?: "✓ Planned ${r.scheduled}-day week (${r.week_focus ?: "block"})" +
-                    (if (r.pushed > 0) " · pushed ${r.pushed} to watch" else "")
-                load()
-                loadWeekPlan(start)
+    private var pendingStartedAt = 0L
+    private var pendingUncertain = false
+    val planningSeconds = MutableStateFlow(0L)
+    val planningMessage = MutableStateFlow<String?>(null)
+    val pendingWeek = MutableStateFlow<PlanWeekRequest?>(null)
+
+    fun checkSavedWeek() = viewModelScope.launch {
+        val req = pendingWeek.value ?: return@launch
+        runCatching { repo.isWeekRequestSaved(req.request_id) }
+            .onSuccess { saved ->
+                if (saved) {
+                    planningMessage.value = "Your plan was saved."
+                    pendingWeek.value = null
+                    load(); loadWeekPlan(LocalDate.parse(req.start_date))
+                } else planningMessage.value = "No saved result yet. The server may still be working; check again before retrying."
+            }.onFailure { planningMessage.value = com.workoutmaker.app.util.reportFailure(it, reference = req.request_id) }
+    }
+
+    fun planWeek(start: LocalDate) {
+        if (!planning.compareAndSet(false, true)) return
+        viewModelScope.launch {
+            planningSeconds.value = 0
+            val timer = launch { while (true) { kotlinx.coroutines.delay(1000); planningSeconds.value++ } }
+            try {
+                val previous = pendingWeek.value?.takeIf { it.start_date == start.toString() }
+                if (previous != null && repo.isWeekRequestSaved(previous.request_id)) {
+                    planningMessage.value = "Your plan was already saved."
+                    pendingWeek.value = null
+                    load(); loadWeekPlan(start)
+                    return@launch
+                }
+                if (previous != null && pendingUncertain && android.os.SystemClock.elapsedRealtime() - pendingStartedAt < 240_000) {
+                    planningMessage.value = "The previous request may still be running. Check for a saved plan; retry will be available after four minutes."
+                    return@launch
+                }
+                val req = previous ?: repo.prepareWeekRequest(PlanWeekRequest(start_date = start.toString()))
+                pendingWeek.value = req
+                pendingStartedAt = android.os.SystemClock.elapsedRealtime()
+                pendingUncertain = false
+                planningMessage.value = "Planning your week from $start…"
+                val result = repo.planWeek(req)
+                planningMessage.value = result.error ?: "Saved ${result.scheduled} days."
+                pendingWeek.value = null
+                load(); loadWeekPlan(start)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                pendingUncertain = e is java.io.IOException || e.message.orEmpty().contains("timeout", true) || e.message.orEmpty().contains("timed out", true)
+                planningMessage.value = com.workoutmaker.app.util.reportFailure(e,
+                    "Planning didn’t return a result. Check for a saved plan before retrying.",
+                    pendingWeek.value?.request_id ?: java.util.UUID.randomUUID().toString())
+            } finally {
+                timer.cancel()
+                planning.value = false
             }
-            .onFailure { banner.value = "Failed to plan week: ${it.message}" }
-        planning.value = false
+        }
     }
 }

@@ -70,6 +70,7 @@ internal fun KnowledgeSection(vm: SettingsViewModel) {
     val soulStatus by vm.soulStatus.collectAsStateSafe()
     val busy by vm.busy.collectAsStateSafe()
     val profile by vm.profile.collectAsStateSafe()
+    RestrictionSection(vm)
     // Same structured editor onboarding uses; edits profile.injuries.
     SectionCard {
         // The count headline lives in the screen header now (detailHeader).

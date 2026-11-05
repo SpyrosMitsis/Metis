@@ -536,9 +536,11 @@ Deno.serve(async (req) => {
   const pre = handleOptions(req);
   if (pre) return pre;
 
+  let supportReference: string = crypto.randomUUID();
   try {
     const admin = adminClient();
     const body = await req.json().catch(() => ({}));
+    supportReference = requestId(body.request_id);
 
     // Cron path: plan NEXT week for every opted-in user. One failure doesn't abort.
     if (body?.all_users) {
@@ -564,8 +566,8 @@ Deno.serve(async (req) => {
     const result = await planForUser(admin, userId, start, body.push ?? true, body.calendar_busy ?? null, requestId(body.request_id), localToday);
     return json(result);
   } catch (e) {
-    log.error("failed", { err: e instanceof Error ? e.message : String(e), ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) });
-    return json({ error: e instanceof Error ? e.message : String(e),
+    log.error("failed", { support_reference: supportReference, err: e instanceof Error ? e.message : String(e), ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) });
+    return json({ error: e instanceof Error ? e.message : String(e), support_reference: supportReference,
       ...(e instanceof PlanError ? { code: e.code, details: e.details } : {}) }, errorStatus(e));
   }
 });

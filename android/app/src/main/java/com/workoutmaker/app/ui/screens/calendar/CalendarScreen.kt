@@ -99,6 +99,9 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
     val banner by vm.banner.collectAsStateSafe()
     val loading by vm.loading.collectAsStateSafe()
     val planning by vm.planning.collectAsStateSafe()
+    val elapsed by vm.planningSeconds.collectAsStateSafe()
+    val planningMessage by vm.planningMessage.collectAsStateSafe()
+    val pendingWeek by vm.pendingWeek.collectAsStateSafe()
     val weekPlan by vm.weekPlan.collectAsStateSafe()
     val strengthByDate by vm.strengthByDate.collectAsStateSafe()
     val activitiesByDate by vm.activitiesByDate.collectAsStateSafe()
@@ -235,6 +238,14 @@ fun CalendarScreen(vm: CalendarViewModel = hiltViewModel(), onOpenStrength: () -
             }
 
             AdaptationControls()
+
+            planningMessage?.let { message ->
+                androidx.compose.foundation.text.selection.SelectionContainer { Text(message, style = MaterialTheme.typography.bodySmall) }
+            }
+            if (planning) Text("Working for ${elapsed}s. You can leave this tab; planning will continue.", style = MaterialTheme.typography.bodySmall)
+            if (pendingWeek != null && !planning) {
+                TextButton(onClick = { vm.checkSavedWeek() }) { Text("Check for saved plan") }
+            }
 
             WeekSummaryCard(
                 weekStart, workouts, planning, weekPlan,
